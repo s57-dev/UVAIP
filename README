@@ -1,0 +1,34 @@
+# Camera App (OpenCV)
+
+## Overview
+This project captures video from a webcam using OpenCV, displays the live feed, and logs frame information such as resolution, timestamp, and FPS.
+
+## Features
+- Webcam video capture
+- Real-time display using OpenCV
+- Frame logging (resolution, FPS, timestamp)
+- Modular C++ class design (`Camera` class)
+
+## Project Structure
+
+project/
+├── include/
+│   └── Camera.h
+├── src/
+│   ├── main.cpp
+│   └── Camera.cpp
+├── out/
+│   └── camera_app
+├── Makefile
+└── README.md
+
+## Build Instructions 
+From the root folder called make 
+
+## Execute the Program 
+Connect USB camera device 
+Ensure that the machine that you are running it on can see the connected camera
+build the program using -> make  
+run the program using -> ./out/camera_app
+
+
