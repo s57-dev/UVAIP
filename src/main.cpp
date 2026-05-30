@@ -1,5 +1,5 @@
 #include "camera.h"
-
+//main application that uses camera class
 int main()
 {
     Camera camera;
