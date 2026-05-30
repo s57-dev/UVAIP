@@ -6,6 +6,7 @@ int main()
 
     if (!camera.open())
     {
+        //exist if unable to open camera
         return -1;
     }
 
