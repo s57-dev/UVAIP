@@ -1,6 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
 project(camera_app)
-
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -39,7 +38,7 @@ add_executable(unit_tests
     cam_sample/tests/CameraTests.cpp
 )
 
-target_include_directories(unit_tests PRIVATE include)
+target_include_directories(unit_tests PRIVATE ${CMAKE_SOURCE_DIR}/cam_sample/include)
 
 target_link_libraries(unit_tests PRIVATE
     camera_lib
