@@ -3,7 +3,7 @@
 
 TEST(CameraTests, CameraOpensSuccessfully)
 {
-    Camera cam(10);
+    MockCamera cam;
 
     ASSERT_TRUE(cam.open());
     ASSERT_TRUE(cam.isOpen());
@@ -11,7 +11,7 @@ TEST(CameraTests, CameraOpensSuccessfully)
 
 TEST(CameraTests, CameraClosesSuccessfully)
 {
-    Camera cam(10);
+    MockCamera cam;
 
     ASSERT_TRUE(cam.open());
 
