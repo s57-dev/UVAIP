@@ -1,33 +1,21 @@
 #include <gtest/gtest.h>
 #include "camera.h"
 
-TEST(CameraTests, CanInstantiateCamera)
+TEST(CameraTests, CameraOpensSuccessfully)
 {
-    Camera cam;
-    SUCCEED();
+    Camera cam(10);
+
+    ASSERT_TRUE(cam.open());
+    ASSERT_TRUE(cam.isOpen());
 }
 
-TEST(CameraTests, OpenCameraDoesNotCrash)
+TEST(CameraTests, CameraClosesSuccessfully)
 {
-    Camera cam;
-    cam.open();
-    SUCCEED();
-}
+    Camera cam(10);
 
-TEST(CameraTests, CloseDoesNotCrash)
-{
-    Camera cam;
-    cam.open();
+    ASSERT_TRUE(cam.open());
+
     cam.close();
-    SUCCEED();
-}
 
-TEST(CameraTests, RunDoesNotCrash)
-{
-    Camera cam;
-    cam.open();
-
-    cam.run(); // WARNING: may block depending on implementation
-
-    SUCCEED();
+    ASSERT_FALSE(cam.isOpen());
 }

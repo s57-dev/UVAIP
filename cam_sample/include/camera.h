@@ -11,6 +11,7 @@ private:
     cv::Mat frame;
 
     int frameIndex;
+    int deviceID;
     std::chrono::high_resolution_clock::time_point startTime;
 
     void logFrameInfo();
@@ -21,6 +22,8 @@ public:
     bool open();
     void run();
     void close();
+
+    bool isOpen() const;
 };
 
 #endif
