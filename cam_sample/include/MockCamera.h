@@ -3,12 +3,15 @@
 #include "ICamera.h"
 #include <iostream>
 
-class MockCamera : public ICamera
+class MockCamera : public ICamera 
 {
+private:
+    bool state = false; 
 public:
     bool open() override
     {
         std::cout << "Mock open\n";
+        state = true;
         return true;
     }
 
@@ -20,10 +23,11 @@ public:
     void close() override
     {
         std::cout << "Mock close\n";
+        state = false; 
     }
 
     bool isOpen() const override
     {
-        return true;
+        return state;
     }
 };
