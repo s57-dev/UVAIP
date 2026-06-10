@@ -51,6 +51,11 @@ void Camera::logFrameInfo()
         << endl;
 }
 
+void Camera::setCallback(ICallback* cb)
+{
+    callback = cb;
+}
+
 void Camera::run()
 {
     while (true)
@@ -61,6 +66,12 @@ void Camera::run()
         {
             cerr << "Error: Empty frame." << endl;
             break;
+        }
+
+        // Notify callback
+        if (callback)
+        {
+            callback->onFrame(frame);
         }
 
         logFrameInfo();

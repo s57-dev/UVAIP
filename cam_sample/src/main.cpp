@@ -1,8 +1,23 @@
 #include "camera.h"
-//main application that uses camera class
+#include "ICallBack.h"
+#include <iostream>
+
+class FrameLogger : public ICallback
+{
+public:
+    void onFrame(const cv::Mat& frame) override
+    {
+        std::cout << "Frame received\n";
+    }
+};
+
 int main()
 {
     Camera camera(10);
+
+    FrameLogger logger;
+
+    camera.setCallback(&logger);
 
     if (!camera.open())
     {
