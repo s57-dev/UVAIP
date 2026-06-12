@@ -6,13 +6,13 @@ using namespace std;
 using namespace cv;
 
 Camera::Camera(int deviceID)
-    : camera(deviceID), frameIndex(0)
+    : camera(), frameIndex(0), deviceID(deviceID)
 {
 }
 
 bool Camera::open()
 {
-    if (!camera.isOpened())
+    if (!camera.open(deviceID))
     {
         cerr << "Could not open camera." << endl;
         return false;
@@ -21,6 +21,11 @@ bool Camera::open()
     startTime = chrono::high_resolution_clock::now();
 
     return true;
+}
+
+bool Camera::isOpen() const
+{
+    return camera.isOpened();
 }
 
 void Camera::logFrameInfo()

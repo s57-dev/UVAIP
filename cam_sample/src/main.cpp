@@ -2,7 +2,7 @@
 //main application that uses camera class
 int main()
 {
-    Camera camera;
+    Camera camera(10);
 
     if (!camera.open())
     {
