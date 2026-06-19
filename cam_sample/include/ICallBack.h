@@ -7,5 +7,5 @@ class ICallback
 public:
     virtual ~ICallback() = default;
 
-    virtual void onFrame(const cv::Mat& frame) = 0;
+    virtual bool onFrameCapture(const cv::Mat& frame) = 0;
 };

@@ -2,22 +2,24 @@
 #include "ICallBack.h"
 #include <iostream>
 
-class FrameLogger : public ICallback
+class FrameCapture : public ICallback
 {
 public:
-    void onFrame(const cv::Mat& frame) override
+    bool onFrameCapture(const cv::Mat& frame) override
     {
-        std::cout << "Frame received\n";
+        cv::imshow("Capture", frame);
+        return cv::waitKey(1) != 'q';
     }
 };
 
 int main()
 {
+
     Camera camera(10);
 
-    FrameLogger logger;
+    FrameCapture capture;
 
-    camera.setCallback(&logger);
+    camera.setCallback(&capture);
 
     if (!camera.open())
     {
