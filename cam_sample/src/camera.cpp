@@ -12,10 +12,14 @@ Camera::Camera(int deviceID)
 
 bool Camera::open()
 {
-    if (!camera.open(deviceID))
+    //check if deviceID is equal to -1
+    if(deviceID != -1)
     {
-        cerr << "Could not open camera." << endl;
-        return false;
+        if (!camera.open(deviceID))
+        {
+            cerr << "Could not open camera." << endl;
+            return false;
+        }
     }
 
     startTime = chrono::high_resolution_clock::now();
@@ -51,27 +55,50 @@ void Camera::logFrameInfo()
         << endl;
 }
 
+void Camera::setCallback(ICallback* cb)
+{
+    callback = cb;
+}
+
 void Camera::run()
 {
-    while (true)
+    if(deviceID != -1)
     {
-        camera >> frame;
-
-        if (frame.empty())
+        while (true)
         {
-            cerr << "Error: Empty frame." << endl;
-            break;
+            camera >> frame;
+
+            if (frame.empty())
+            {
+                cerr << "Error: Empty frame." << endl;
+                break;
+            }
+
+            if (callback && !callback->onFrameCapture(frame))
+            {
+                break;
+            }
+
+            //logFrameInfo();
+
+            frameIndex++;
         }
-
-        logFrameInfo();
-
-        imshow("Camera Feed", frame);
-
-        frameIndex++;
-
-        if (waitKey(1) == 'q')
+    }
+    else
+    {
+        while (true)
         {
-            break;
+            frame = cv::Mat(height, width, CV_8UC1);
+            checkerBoard(height, width, frameIndex, frame.data);
+
+            if (callback && !callback->onFrameCapture(frame))
+            {
+                break;
+            }
+
+            //logFrameInfo();
+
+            frameIndex++;
         }
     }
 }
@@ -80,4 +107,52 @@ void Camera::close()
 {
     camera.release();
     destroyAllWindows();
+}
+
+void Camera::checkerBoard(int height, int width, int frameNumber, uint8_t* buffer)
+{
+    const int tile = 64;
+    const int shift = frameNumber % tile;
+
+    for (int y = 0; y < height; ++y)
+    {
+        for (int x = 0; x < width; ++x)
+        {
+            const int cx = (x + shift) / tile;
+            const int cy = (y + shift) / tile;
+
+            buffer[y * width + x] = ((cx + cy) % 2 == 0) ? 255 : 0;
+        }
+    }
+}
+
+void Camera::setResolution(int w, int h)
+{
+    width = w;
+    height = h;
+}
+
+void Camera::setFrameRate (int fr)
+{
+    frameRate = fr;
+}
+
+int Camera::getWidth() const
+{
+    return width;
+}
+
+int Camera::getHeight() const
+{
+    return height;
+}
+
+int Camera::getFrameRate() const
+{
+    return frameRate;
+}
+
+int Camera::getDeviceID() const
+{
+    return deviceID;
 }

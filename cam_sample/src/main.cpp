@@ -1,8 +1,25 @@
 #include "camera.h"
-//main application that uses camera class
+#include "ICallBack.h"
+#include <iostream>
+
+class FrameCapture : public ICallback
+{
+public:
+    bool onFrameCapture(const cv::Mat& frame) override
+    {
+        cv::imshow("Capture", frame);
+        return cv::waitKey(1) != 'q';
+    }
+};
+
 int main()
 {
+
     Camera camera(10);
+
+    FrameCapture capture;
+
+    camera.setCallback(&capture);
 
     if (!camera.open())
     {
