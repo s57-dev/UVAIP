@@ -1,33 +1,128 @@
 #include "camera.h"
+#include "CameraError.h"
 
 #include <iostream>
+#include <string>
+#include <vector>
 
 using namespace std;
 using namespace cv;
 
-Camera::Camera(int deviceID)
-    : camera(), frameIndex(0), deviceID(deviceID)
+namespace
+{
+const std::vector<CameraConfiguration>& supportedCameraConfigs()
+{
+    static const std::vector<CameraConfiguration> configs = {
+        {160, 120, 30},
+        {320, 240, 30},
+        {640, 480, 30},
+        {800, 600, 30},
+        {1280, 720, 30},
+        {1280, 720, 60},
+        {1366, 768, 30},
+        {1920, 1080, 30},
+        {1920, 1080, 60},
+        {2560, 1440, 30},
+        {2560, 1440, 60},
+        {3840, 2160, 30},
+        {3840, 2160, 60},
+    };
+    return configs;
+}
+}
+
+Camera::Camera(int deviceID, const CameraConfiguration& config)
+    : camera(), frameIndex(0), deviceID_(deviceID), config_(config)
 {
 }
 
-bool Camera::open()
+CameraConfiguration Camera::getConfigSnapshot() const
 {
-    //check if deviceID is equal to -1
-    if(deviceID != -1)
+    std::lock_guard<std::mutex> lock(lifecycleMutex_);
+    return config_;
+}
+
+void Camera::setConfiguration(const CameraConfiguration& config)
+{
+    std::lock_guard<std::mutex> lock(lifecycleMutex_);
+    config_ = config;
+}
+
+CameraConfiguration Camera::getConfiguration() const
+{
+    return getConfigSnapshot();
+}
+
+std::vector<CameraConfiguration> Camera::getAvailableCameraConfigs() const
+{
+    return supportedCameraConfigs();
+}
+
+void Camera::applyConfiguration()
+{
+    const CameraConfiguration config = getConfigSnapshot();
+
+    if (config.width > 0)
     {
-        if (!camera.open(deviceID))
-        {
-            cerr << "Could not open camera." << endl;
-            return false;
-        }
+        camera.set(CAP_PROP_FRAME_WIDTH, config.width);
     }
 
-    startTime = chrono::high_resolution_clock::now();
+    if (config.height > 0)
+    {
+        camera.set(CAP_PROP_FRAME_HEIGHT, config.height);
+    }
 
-    return true;
+    if (config.frameRate > 0)
+    {
+        camera.set(CAP_PROP_FPS, config.frameRate);
+    }
 }
 
-bool Camera::isOpen() const
+void Camera::stopWorker()
+{
+    if (worker.joinable())
+    {
+        worker.request_stop();
+    }
+}
+
+void Camera::joinWorker()
+{
+    if (worker.joinable())
+    {
+        worker.join();
+    }
+}
+
+void Camera::open()
+{
+    if (!camera.open(deviceID_))
+    {
+        throw CameraError("Could not open camera device " + std::to_string(deviceID_));
+    }
+
+    applyConfiguration();
+    startTime = chrono::high_resolution_clock::now();
+
+    std::lock_guard<std::mutex> lock(lifecycleMutex_);
+    if (!worker.joinable())
+    {
+        worker = std::jthread([this](std::stop_token token) { captureLoop(token); });
+    }
+}
+
+void Camera::stop()
+{
+    stopWorker();
+}
+
+void Camera::join()
+{
+    stopWorker();
+    joinWorker();
+}
+
+bool Camera::isRunning() const
 {
     return camera.isOpened();
 }
@@ -60,99 +155,35 @@ void Camera::setCallback(ICallback* cb)
     callback = cb;
 }
 
-void Camera::run()
+void Camera::captureLoop(std::stop_token stopToken)
 {
-    if(deviceID != -1)
+    while (!stopToken.stop_requested())
     {
-        while (true)
+        camera >> frame;
+
+        const CameraConfiguration config = getConfigSnapshot();
+        cout << "Resolution: " << frame.cols << "x" << frame.rows
+             << " | Frame rate: " << config.frameRate << " fps" << endl;
+
+        if (frame.empty())
         {
-            camera >> frame;
-
-            if (frame.empty())
-            {
-                cerr << "Error: Empty frame." << endl;
-                break;
-            }
-
-            if (callback && !callback->onFrameCapture(frame))
-            {
-                break;
-            }
-
-            //logFrameInfo();
-
-            frameIndex++;
+            throw CameraError("Empty frame from device " + std::to_string(deviceID_));
         }
-    }
-    else
-    {
-        while (true)
+
+        if (callback && !callback->onFrameCapture(frame))
         {
-            frame = cv::Mat(height, width, CV_8UC1);
-            checkerBoard(height, width, frameIndex, frame.data);
-
-            if (callback && !callback->onFrameCapture(frame))
-            {
-                break;
-            }
-
-            //logFrameInfo();
-
-            frameIndex++;
+            break;
         }
+
+        frameIndex++;
     }
 }
 
 void Camera::close()
 {
+    stopWorker();
+    joinWorker();
+
     camera.release();
     destroyAllWindows();
-}
-
-void Camera::checkerBoard(int height, int width, int frameNumber, uint8_t* buffer)
-{
-    const int tile = 64;
-    const int shift = frameNumber % tile;
-
-    for (int y = 0; y < height; ++y)
-    {
-        for (int x = 0; x < width; ++x)
-        {
-            const int cx = (x + shift) / tile;
-            const int cy = (y + shift) / tile;
-
-            buffer[y * width + x] = ((cx + cy) % 2 == 0) ? 255 : 0;
-        }
-    }
-}
-
-void Camera::setResolution(int w, int h)
-{
-    width = w;
-    height = h;
-}
-
-void Camera::setFrameRate (int fr)
-{
-    frameRate = fr;
-}
-
-int Camera::getWidth() const
-{
-    return width;
-}
-
-int Camera::getHeight() const
-{
-    return height;
-}
-
-int Camera::getFrameRate() const
-{
-    return frameRate;
-}
-
-int Camera::getDeviceID() const
-{
-    return deviceID;
 }

@@ -2,8 +2,13 @@
 #define CAMERA_H
 
 #include <opencv2/opencv.hpp>
+#include "CameraConfiguration.h"
 #include "ICallBack.h"
 #include <chrono>
+#include <mutex>
+#include <stop_token>
+#include <thread>
+#include <vector>
 
 class Camera
 {
@@ -12,33 +17,37 @@ private:
     cv::Mat frame;
 
     int frameIndex;
-    int deviceID;
+    int deviceID_;
+    CameraConfiguration config_;
     std::chrono::high_resolution_clock::time_point startTime;
-    int width = 640;
-    int height = 480;
-    int frameRate = 30; 
 
     ICallback* callback = nullptr;
 
+    mutable std::mutex lifecycleMutex_;
+
     void logFrameInfo();
+    std::jthread worker;
+
+    void captureLoop(std::stop_token stopToken);
+    void applyConfiguration();
+    CameraConfiguration getConfigSnapshot() const;
+    void stopWorker();
+    void joinWorker();
 
 public:
-    Camera(int deviceID = 0);
+    Camera(int deviceID, const CameraConfiguration& config = CameraConfiguration{});
 
     void setCallback(ICallback* cb);
 
-    bool open();
-    void run();
-    void close();
-    bool isOpen() const;
-    void setResolution(int w, int h);
-    void setFrameRate(int fr);
-    int getWidth() const;
-    int getHeight() const;
-    int getFrameRate() const;
-    int getDeviceID() const;
+    void setConfiguration(const CameraConfiguration& config);
+    CameraConfiguration getConfiguration() const;
+    std::vector<CameraConfiguration> getAvailableCameraConfigs() const;
 
-    void checkerBoard(int height, int width, int frameNumber, uint8_t* buffer);
+    void open();
+    void join();
+    void close();
+    bool isRunning() const;
+    void stop();
 };
 
 #endif
