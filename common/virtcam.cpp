@@ -150,14 +150,17 @@ videoParams VirtCam::getVideoParams() const
 
 void VirtCam::captureLoop(std::stop_token stopToken)
 {
+    auto nextFrameTime = chrono::high_resolution_clock::now();
+
     while (!stopToken.stop_requested())
     {
         const videoParams localParams = getParamsSnapshot();
         const int fps = localParams.frameRate > 0 ? localParams.frameRate : 30;
-        const auto frameInterval = chrono::duration<double>(1.0 / fps);
-        auto nextFrameTime = chrono::high_resolution_clock::now();
+        const auto frameInterval = chrono::duration_cast<chrono::high_resolution_clock::duration>(
+            chrono::duration<double>(1.0 / fps));
 
         this_thread::sleep_until(nextFrameTime);
+        nextFrameTime += frameInterval;
 
         if (stopToken.stop_requested())
         {

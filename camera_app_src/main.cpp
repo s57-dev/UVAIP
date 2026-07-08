@@ -1,10 +1,12 @@
 #include "camera.h"
 #include "CameraError.h"
+#include "FaceDetector.h"
 #include "FrameQueue.h"
 #include "ICallBack.h"
 #include <atomic>
 #include <chrono>
 #include <iostream>
+#include <string>
 #include <thread>
 
 class FrameCapture : public ICallback
@@ -54,7 +56,10 @@ int main()
         config.height = 480;
         config.frameRate = 30;
 
-        Camera camera(10, config);
+        const std::string modelPath = "models/face_detection_short_range.tflite";
+        FaceDetector faceDetector(modelPath);
+
+        Camera camera(0, config);
         FrameCapture capture(frameQueue);
 
         camera.setCallback(&capture);
@@ -67,12 +72,19 @@ int main()
             if (frameQueue.waitPop(frame, std::chrono::milliseconds(33)))
             {
                 latestFrame = std::move(frame);
+
+                const int faceCount = faceDetector.countFaces(latestFrame);
+
                 std::cout << "Queue size: " << frameQueue.size()
                           << " | Latest frame: " << latestFrame.cols
-                          << "x" << latestFrame.rows << std::endl;
-            
-                        cv::imshow("Latest Frame", latestFrame);
-                        cv::waitKey(1);
+                          << "x" << latestFrame.rows
+                          << " | Faces: " << faceCount << std::endl;
+
+                cv::putText(latestFrame, "Faces: " + std::to_string(faceCount),
+                            cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 1.0,
+                            cv::Scalar(0, 255, 0), 2);
+                cv::imshow("Latest Frame", latestFrame);
+                cv::waitKey(1);
             }
         }
 
