@@ -27,3 +27,36 @@ jobs:
         run: |
           cd build
           ctest --output-on-failure
+name: Build and Test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y cmake build-essential libopencv-dev libflatbuffers-dev
+
+          # Install TensorFlow Lite from the official source
+          wget https://github.com/tensorflow/tensorflow/releases/download/v2.13.0/libtensorflow_lite.tar.gz
+          sudo tar -xzf libtensorflow_lite.tar.gz -C /usr/local/
+
+      - name: Configure CMake
+        run: cmake -B build
+
+      - name: Build project
+        run: cmake --build build
+
+      - name: Run tests
+        run: |
+          cd build
+          ctest --output-on-failure
