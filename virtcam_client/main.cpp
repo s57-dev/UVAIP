@@ -102,6 +102,7 @@ int main()
             }
         }
 
+
         virtcam.stop();
         virtcam.join();
         virtcam.close();
@@ -109,6 +110,7 @@ int main()
 
         if (inputThread.joinable())
         {
+            //join
             inputThread.join();
         }
 
