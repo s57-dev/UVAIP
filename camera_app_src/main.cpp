@@ -63,6 +63,7 @@ int main(int argc, char** argv)
         config.height = 480;
         config.frameRate = 30;
 
+#ifdef CAMERA_APP_WITH_FACE_DETECTION
         const std::string modelPath = "models/face_detection_short_range.tflite";
         FaceDetector faceDetector(modelPath);
 #endif
