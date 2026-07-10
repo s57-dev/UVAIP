@@ -1,3 +1,6 @@
+# Finds TensorFlow Lite if it is installed. Never fails hard — callers should
+# use find_package(TensorFlowLite QUIET) and check TensorFlowLite_FOUND.
+
 find_path(TensorFlowLite_INCLUDE_DIR
     NAMES tensorflow/lite/interpreter.h
     PATHS
@@ -33,7 +36,9 @@ find_path(FlatBuffers_INCLUDE_DIR
         "${CMAKE_BINARY_DIR}/_tflite_deps/flatbuffers/usr/include"
 )
 
-function(_fetch_tflite_dev_headers)
+# Optional: unpack apt .deb packages into the build dir when headers are missing
+# but the runtime library is present (e.g. Ubuntu 26.04 without -dev installed).
+function(_try_fetch_tflite_dev_headers)
     if(TensorFlowLite_INCLUDE_DIR AND FlatBuffers_INCLUDE_DIR)
         return()
     endif()
@@ -44,7 +49,7 @@ function(_fetch_tflite_dev_headers)
     if(NOT TensorFlowLite_INCLUDE_DIR)
         set(_tflite_marker "${_deps_root}/tflite/.extracted")
         if(NOT EXISTS "${_tflite_marker}")
-            message(STATUS "TensorFlow Lite headers not found; downloading libtensorflow-lite-dev...")
+            message(STATUS "TensorFlow Lite headers not found; trying apt download of libtensorflow-lite-dev...")
             execute_process(
                 COMMAND apt download libtensorflow-lite-dev
                 WORKING_DIRECTORY "${_deps_root}"
@@ -52,27 +57,22 @@ function(_fetch_tflite_dev_headers)
                 OUTPUT_QUIET
                 ERROR_QUIET
             )
-            if(NOT _tflite_download_result EQUAL 0)
-                message(FATAL_ERROR
-                    "Failed to download libtensorflow-lite-dev. "
-                    "Install it with: sudo apt install libtensorflow-lite-dev libflatbuffers-dev")
+            if(_tflite_download_result EQUAL 0)
+                file(GLOB _tflite_debs "${_deps_root}/libtensorflow-lite-dev*.deb")
+                if(_tflite_debs)
+                    list(GET _tflite_debs 0 _tflite_deb)
+                    execute_process(
+                        COMMAND ${CMAKE_COMMAND} -E make_directory "${_deps_root}/tflite"
+                        COMMAND dpkg-deb -x "${_tflite_deb}" "${_deps_root}/tflite"
+                        RESULT_VARIABLE _tflite_extract_result
+                    )
+                    if(_tflite_extract_result EQUAL 0)
+                        file(TOUCH "${_tflite_marker}")
+                    endif()
+                endif()
+            else()
+                message(STATUS "libtensorflow-lite-dev is not available from apt on this OS")
             endif()
-
-            file(GLOB _tflite_debs "${_deps_root}/libtensorflow-lite-dev*.deb")
-            if(NOT _tflite_debs)
-                message(FATAL_ERROR "libtensorflow-lite-dev .deb not found after download")
-            endif()
-            list(GET _tflite_debs 0 _tflite_deb)
-
-            execute_process(
-                COMMAND ${CMAKE_COMMAND} -E make_directory "${_deps_root}/tflite"
-                COMMAND dpkg-deb -x "${_tflite_deb}" "${_deps_root}/tflite"
-                RESULT_VARIABLE _tflite_extract_result
-            )
-            if(NOT _tflite_extract_result EQUAL 0)
-                message(FATAL_ERROR "Failed to extract libtensorflow-lite-dev")
-            endif()
-            file(TOUCH "${_tflite_marker}")
         endif()
 
         find_path(TensorFlowLite_INCLUDE_DIR
@@ -85,7 +85,7 @@ function(_fetch_tflite_dev_headers)
     if(NOT FlatBuffers_INCLUDE_DIR)
         set(_flatbuffers_marker "${_deps_root}/flatbuffers/.extracted")
         if(NOT EXISTS "${_flatbuffers_marker}")
-            message(STATUS "FlatBuffers headers not found; downloading libflatbuffers-dev...")
+            message(STATUS "FlatBuffers headers not found; trying apt download of libflatbuffers-dev...")
             execute_process(
                 COMMAND apt download libflatbuffers-dev
                 WORKING_DIRECTORY "${_deps_root}"
@@ -93,27 +93,22 @@ function(_fetch_tflite_dev_headers)
                 OUTPUT_QUIET
                 ERROR_QUIET
             )
-            if(NOT _flatbuffers_download_result EQUAL 0)
-                message(FATAL_ERROR
-                    "Failed to download libflatbuffers-dev. "
-                    "Install it with: sudo apt install libflatbuffers-dev")
+            if(_flatbuffers_download_result EQUAL 0)
+                file(GLOB _flatbuffers_debs "${_deps_root}/libflatbuffers-dev*.deb")
+                if(_flatbuffers_debs)
+                    list(GET _flatbuffers_debs 0 _flatbuffers_deb)
+                    execute_process(
+                        COMMAND ${CMAKE_COMMAND} -E make_directory "${_deps_root}/flatbuffers"
+                        COMMAND dpkg-deb -x "${_flatbuffers_deb}" "${_deps_root}/flatbuffers"
+                        RESULT_VARIABLE _flatbuffers_extract_result
+                    )
+                    if(_flatbuffers_extract_result EQUAL 0)
+                        file(TOUCH "${_flatbuffers_marker}")
+                    endif()
+                endif()
+            else()
+                message(STATUS "libflatbuffers-dev download failed or unavailable")
             endif()
-
-            file(GLOB _flatbuffers_debs "${_deps_root}/libflatbuffers-dev*.deb")
-            if(NOT _flatbuffers_debs)
-                message(FATAL_ERROR "libflatbuffers-dev .deb not found after download")
-            endif()
-            list(GET _flatbuffers_debs 0 _flatbuffers_deb)
-
-            execute_process(
-                COMMAND ${CMAKE_COMMAND} -E make_directory "${_deps_root}/flatbuffers"
-                COMMAND dpkg-deb -x "${_flatbuffers_deb}" "${_deps_root}/flatbuffers"
-                RESULT_VARIABLE _flatbuffers_extract_result
-            )
-            if(NOT _flatbuffers_extract_result EQUAL 0)
-                message(FATAL_ERROR "Failed to extract libflatbuffers-dev")
-            endif()
-            file(TOUCH "${_flatbuffers_marker}")
         endif()
 
         find_path(FlatBuffers_INCLUDE_DIR
@@ -125,7 +120,7 @@ function(_fetch_tflite_dev_headers)
 endfunction()
 
 if(NOT TensorFlowLite_INCLUDE_DIR OR NOT FlatBuffers_INCLUDE_DIR)
-    _fetch_tflite_dev_headers()
+    _try_fetch_tflite_dev_headers()
 endif()
 
 include(FindPackageHandleStandardArgs)
