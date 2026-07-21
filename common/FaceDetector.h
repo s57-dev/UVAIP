@@ -5,6 +5,15 @@
 #include <memory>
 #include <string>
 
+enum class ColorFormat
+{
+    Gray,
+    Bgr,
+    Rgb,
+    Bgra,
+    Rgba,
+};
+
 class FaceDetector
 {
 public:
@@ -14,7 +23,9 @@ public:
     FaceDetector(const FaceDetector&) = delete;
     FaceDetector& operator=(const FaceDetector&) = delete;
 
-    int countFaces(const cv::Mat& frame, float confidenceThreshold = 0.5f);
+    int countFaces(const cv::Mat& frame,
+                   ColorFormat colorFormat = ColorFormat::Bgr,
+                   float confidenceThreshold = 0.5f);
 
 private:
     struct Impl;

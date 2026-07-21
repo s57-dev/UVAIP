@@ -14,14 +14,39 @@
 
 namespace
 {
+
+/*using both 16x16 feature map and 8x8 feature map 
+* 16x16 -> 2 anchors per cell
+* 8x8 -> 6 anchors per cell
+* 16x16 = 256 * 2 = 512 anchors
+* 8x8 = 64 * 6 = 384 anchors 
+* 512 + 384 = 896 anchors
+*/
 constexpr int kNumAnchors = 896;
+/* x_center, y_center, w, h = 4
+* 6 landmarks and 2 coordinates each = 12 
+* 12 + 4 = 16 
+*/
 constexpr int kNumCoords = 16;
+/* the chosen blaze face model accepts a 128x128 image
+* if image is not 128x128, it is resized to 128x128
+*/
 constexpr int kInputSize = 128;
+
+// the model Blaze Face short-range model is trained for128x128
 constexpr float kXScale = 128.0f;
 constexpr float kYScale = 128.0f;
 constexpr float kWScale = 128.0f;
 constexpr float kHScale = 128.0f;
+
+/* the blaze face model expects the input image to be normalized to [-1, 1]
+* thus image is clipped to fit the -100 to 100 range
+*/
 constexpr float kScoreClip = 100.0f;
+/* non-maximum suppression threshold 
+* if two bounding boxes have an IoU greater than the threshold, 
+* the one with the lower score is removed
+*/
 constexpr float kNmsThreshold = 0.3f;
 
 struct Anchor
@@ -47,6 +72,27 @@ float sigmoid(float value)
     return 1.0f / (1.0f + std::exp(-value));
 }
 
+/**
+ * Intersection over Union (IoU) is a metric used to measure how much two
+ * bounding boxes overlap.
+ *
+ * formula 
+ * IoU = Intersection Area / Union Area
+ *
+ * The returned value ranges from 0.0 to 1.0
+ * 0.0 means no overlap
+ * 1.0 means there is a perfect overlap
+ *
+ * This value is used during Non-Maximum Suppression (NMS) to determine
+ * whether two detections represent the same face. If the IoU exceeds the
+ * configured threshold 0.3, the detection with the lower
+ * confidence score is discarded.
+ *
+ * @param a The first detection containing the coordinates of a bounding box
+ * @param b The second detection containing the coordinates of a bounding box
+ *
+ * @return The IoU value in the range [0.0, 1.0]
+ */
 float intersectionOverUnion(const Detection& a, const Detection& b)
 {
     const float ymin = std::max(a.ymin, b.ymin);
@@ -227,23 +273,30 @@ std::vector<Detection> suppressOverlaps(std::vector<Detection> detections)
     return kept;
 }
 
-void preprocessFrame(const cv::Mat& frame, float* inputTensor)
+void preprocessFrame(const cv::Mat& frame, ColorFormat colorFormat, float* inputTensor)
 {
     cv::Mat resized;
     cv::resize(frame, resized, cv::Size(kInputSize, kInputSize));
 
     cv::Mat rgb;
-    if (resized.channels() == 1)
+    switch (colorFormat)
     {
+    case ColorFormat::Gray:
         cv::cvtColor(resized, rgb, cv::COLOR_GRAY2RGB);
-    }
-    else if (resized.channels() == 4)
-    {
-        cv::cvtColor(resized, rgb, cv::COLOR_BGRA2RGB);
-    }
-    else
-    {
+        break;
+    case ColorFormat::Rgb:
+        // Already RGB — no conversion needed for the model input.
+        rgb = resized;
+        break;
+    case ColorFormat::Bgr:
         cv::cvtColor(resized, rgb, cv::COLOR_BGR2RGB);
+        break;
+    case ColorFormat::Bgra:
+        cv::cvtColor(resized, rgb, cv::COLOR_BGRA2RGB);
+        break;
+    case ColorFormat::Rgba:
+        cv::cvtColor(resized, rgb, cv::COLOR_RGBA2RGB);
+        break;
     }
 
     for (int y = 0; y < kInputSize; ++y)
@@ -294,7 +347,7 @@ struct FaceDetector::Impl
         anchors = generateBlazeFaceAnchors();
     }
 
-    int countFaces(const cv::Mat& frame, float confidenceThreshold)
+    int countFaces(const cv::Mat& frame, ColorFormat colorFormat, float confidenceThreshold)
     {
         if (frame.empty())
         {
@@ -307,7 +360,7 @@ struct FaceDetector::Impl
             throw CameraError("Face detection model input tensor is not float32");
         }
 
-        preprocessFrame(frame, inputTensor);
+        preprocessFrame(frame, colorFormat, inputTensor);
 
         if (interpreter->Invoke() != kTfLiteOk)
         {
@@ -334,7 +387,9 @@ FaceDetector::FaceDetector(const std::string& modelPath)
 
 FaceDetector::~FaceDetector() = default;
 
-int FaceDetector::countFaces(const cv::Mat& frame, float confidenceThreshold)
+int FaceDetector::countFaces(const cv::Mat& frame,
+                             ColorFormat colorFormat,
+                             float confidenceThreshold)
 {
-    return impl_->countFaces(frame, confidenceThreshold);
+    return impl_->countFaces(frame, colorFormat, confidenceThreshold);
 }
