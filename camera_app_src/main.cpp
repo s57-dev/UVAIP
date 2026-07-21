@@ -3,14 +3,9 @@
 #include "FrameQueue.h"
 #include "ICallBack.h"
 
-#ifdef CAMERA_APP_WITH_FACE_DETECTION
-#include "FaceDetector.h"
-#endif
-
 #include <atomic>
 #include <chrono>
 #include <iostream>
-#include <string>
 #include <thread>
 
 class FrameCapture : public ICallback
@@ -63,11 +58,6 @@ int main(int argc, char** argv)
         config.height = 480;
         config.frameRate = 30;
 
-#ifdef CAMERA_APP_WITH_FACE_DETECTION
-        const std::string modelPath = "models/face_detection_short_range.tflite";
-        FaceDetector faceDetector(modelPath);
-#endif
-
         Camera camera(0, config);
         FrameCapture capture(frameQueue);
 
@@ -82,22 +72,9 @@ int main(int argc, char** argv)
             {
                 latestFrame = std::move(frame);
 
-#ifdef CAMERA_APP_WITH_FACE_DETECTION
-                const int faceCount = faceDetector.countFaces(latestFrame);
-
-                std::cout << "Queue size: " << frameQueue.size()
-                          << " | Latest frame: " << latestFrame.cols
-                          << "x" << latestFrame.rows
-                          << " | Faces: " << faceCount << std::endl;
-
-                cv::putText(latestFrame, "Faces: " + std::to_string(faceCount),
-                            cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 1.0,
-                            cv::Scalar(0, 255, 0), 2);
-#else
                 std::cout << "Queue size: " << frameQueue.size()
                           << " | Latest frame: " << latestFrame.cols
                           << "x" << latestFrame.rows << std::endl;
-#endif
 
                 cv::imshow("Latest Frame", latestFrame);
                 cv::waitKey(1);

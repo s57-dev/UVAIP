@@ -16,7 +16,7 @@ jobs:
         run: |
           sudo apt update
           # Ubuntu 24.04 (ubuntu-latest) does not ship libtensorflow-lite-dev.
-          # Build camera/virtcam without face detection; enable it locally on Ubuntu 26.04+.
+          # Skip examples/client/face_detect; enable it locally on Ubuntu 26.04+.
           sudo apt install -y cmake build-essential libopencv-dev
 
       - name: Configure CMake
