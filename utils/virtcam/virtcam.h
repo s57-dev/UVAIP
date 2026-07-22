@@ -2,7 +2,7 @@
 #define VIRTCAM_H
 
 #include <opencv2/opencv.hpp>
-#include "ICallBack.h"
+#include "camera/ICallBack.h"
 #include <chrono>
 #include <cstdint>
 #include <memory>

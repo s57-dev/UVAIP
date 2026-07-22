@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
-#include "virtcam.h"
-#include "ICallBack.h"
+#include "virtcam/virtcam.h"
+#include "camera/ICallBack.h"
 
 #include <atomic>
 #include <chrono>

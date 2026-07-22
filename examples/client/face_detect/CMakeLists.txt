@@ -5,16 +5,16 @@ add_library(face_detector_lib FaceDetector.cpp)
 target_include_directories(face_detector_lib
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}
-        ${COMMON_INCLUDE_DIR}
 )
 target_link_libraries(face_detector_lib
     PUBLIC
+        camera_lib
         ${OpenCV_LIBS}
         TensorFlowLite::TensorFlowLite
 )
 
 add_executable(face_detect main.cpp)
-target_link_libraries(face_detect PRIVATE camera_lib face_detector_lib)
+target_link_libraries(face_detect PRIVATE face_detector_lib)
 set_target_properties(face_detect PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/out
 )

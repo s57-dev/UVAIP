@@ -1,10 +1,10 @@
 CompileFlags:
   Add:
     - -std=c++20
+    - -Iutils
     - -Iinterfaces
     - -Iexamples/producer/chessboard
     - -Iexamples/client/face_detect
     - -Itransport/v4l2
-    - -Icommon
     - -isystem
     - /usr/include/opencv4

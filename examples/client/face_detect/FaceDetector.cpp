@@ -1,6 +1,6 @@
 #include "FaceDetector.h"
 
-#include "CameraError.h"
+#include "camera/CameraError.h"
 
 #include <tensorflow/lite/interpreter.h>
 #include <tensorflow/lite/kernels/register.h>

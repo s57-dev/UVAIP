@@ -1,7 +1,7 @@
-#include "camera.h"
-#include "CameraError.h"
-#include "FrameQueue.h"
-#include "ICallBack.h"
+#include "camera/camera.h"
+#include "camera/CameraError.h"
+#include "camera/FrameQueue.h"
+#include "camera/ICallBack.h"
 
 #include <atomic>
 #include <chrono>

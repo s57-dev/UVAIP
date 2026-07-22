@@ -40,17 +40,17 @@ FetchContent_MakeAvailable(googletest)
 enable_testing()
 include(GoogleTest)
 
-set(COMMON_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/common)
+set(UVAP_UTILS_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/utils)
 
-# Shared camera capture library
-add_library(camera_lib common/camera.cpp)
-target_include_directories(camera_lib PUBLIC ${COMMON_INCLUDE_DIR})
+# OpenCV capture helpers (client-side utils, not UVAP VAL)
+add_library(camera_lib utils/camera/camera.cpp)
+target_include_directories(camera_lib PUBLIC ${UVAP_UTILS_INCLUDE_DIR})
 target_link_libraries(camera_lib PUBLIC ${OpenCV_LIBS} Threads::Threads)
 
-# Virtual camera / checkerboard library
-add_library(virtcam_lib common/virtcam.cpp)
-target_include_directories(virtcam_lib PUBLIC ${COMMON_INCLUDE_DIR})
-target_link_libraries(virtcam_lib PUBLIC ${OpenCV_LIBS} Threads::Threads)
+# Synthetic checkerboard generator (legacy demo / tests)
+add_library(virtcam_lib utils/virtcam/virtcam.cpp)
+target_include_directories(virtcam_lib PUBLIC ${UVAP_UTILS_INCLUDE_DIR})
+target_link_libraries(virtcam_lib PUBLIC camera_lib)
 
 # UVAP V4L2 producer transport (VIDEO_OUTPUT / v4l2loopback)
 add_subdirectory(transport/v4l2)
@@ -81,11 +81,9 @@ endif()
 
 # Unit tests
 add_executable(unit_tests
-    tests/CameraTests.cpp
     tests/VirtCamTests.cpp
 )
 target_link_libraries(unit_tests PRIVATE
-    camera_lib
     virtcam_lib
     GTest::gtest_main
 )

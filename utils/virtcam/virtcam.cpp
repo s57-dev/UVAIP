@@ -1,5 +1,5 @@
-#include "virtcam.h"
-#include "CameraError.h"
+#include "virtcam/virtcam.h"
+#include "camera/CameraError.h"
 
 #include <iostream>
 #include <memory>

@@ -3,7 +3,7 @@
         {
             "name": "Linux",
             "includePath": [
-                "${workspaceFolder}/common",
+                "${workspaceFolder}/utils",
                 "${workspaceFolder}/interfaces",
                 "${workspaceFolder}/transport/v4l2",
                 "${workspaceFolder}/examples/producer/chessboard",

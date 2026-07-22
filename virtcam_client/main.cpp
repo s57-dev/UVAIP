@@ -1,6 +1,6 @@
-#include "virtcam.h"
-#include "CameraError.h"
-#include "FrameQueue.h"
+#include "virtcam/virtcam.h"
+#include "camera/CameraError.h"
+#include "camera/FrameQueue.h"
 #include <atomic>
 #include <chrono>
 #include <iostream>
