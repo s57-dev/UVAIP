@@ -29,28 +29,12 @@ if(ENABLE_FACE_DETECTION)
     endif()
 endif()
 
-include(FetchContent)
-FetchContent_Declare(
-    googletest
-    URL https://github.com/google/googletest/archive/refs/tags/v1.17.0.zip
-    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-)
-FetchContent_MakeAvailable(googletest)
-
-enable_testing()
-include(GoogleTest)
-
 set(UVAP_UTILS_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/utils)
 
-# OpenCV capture helpers (client-side utils, not UVAP VAL)
+# OpenCV capture helpers (sample consumers, not UVAP VAL)
 add_library(camera_lib utils/camera/camera.cpp)
 target_include_directories(camera_lib PUBLIC ${UVAP_UTILS_INCLUDE_DIR})
 target_link_libraries(camera_lib PUBLIC ${OpenCV_LIBS} Threads::Threads)
-
-# Synthetic checkerboard generator (legacy demo / tests)
-add_library(virtcam_lib utils/virtcam/virtcam.cpp)
-target_include_directories(virtcam_lib PUBLIC ${UVAP_UTILS_INCLUDE_DIR})
-target_link_libraries(virtcam_lib PUBLIC camera_lib)
 
 # UVAP V4L2 producer transport (VIDEO_OUTPUT / v4l2loopback)
 add_subdirectory(transport/v4l2)
@@ -58,33 +42,9 @@ add_subdirectory(transport/v4l2)
 # Synthetic chessboard producer → scaler → V4L2 sink
 add_subdirectory(examples/producer/chessboard)
 
-# Webcam application
-add_executable(camera_app camera_app_src/main.cpp)
-target_link_libraries(camera_app PRIVATE camera_lib)
-set_target_properties(camera_app PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/out
-)
-
-# Virtual camera client (streams checkerboard to V4L2)
-add_executable(virtcam_client virtcam_client/main.cpp)
-target_link_libraries(virtcam_client PRIVATE virtcam_lib)
-set_target_properties(virtcam_client PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/out
-)
-
 if(ENABLE_FACE_DETECTION)
     add_subdirectory(examples/client/face_detect)
     message(STATUS "Face detection example: ENABLED")
 else()
     message(STATUS "Face detection example: DISABLED")
 endif()
-
-# Unit tests
-add_executable(unit_tests
-    tests/VirtCamTests.cpp
-)
-target_link_libraries(unit_tests PRIVATE
-    virtcam_lib
-    GTest::gtest_main
-)
-gtest_discover_tests(unit_tests)

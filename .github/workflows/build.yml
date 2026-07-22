@@ -24,8 +24,3 @@ jobs:
 
       - name: Build project
         run: cmake --build build
-
-      - name: Run tests
-        run: |
-          cd build
-          ctest --output-on-failure

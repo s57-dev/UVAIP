@@ -2,11 +2,11 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug virtcam_client",
+            "name": "Debug chessboard_producer",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/out/virtcam_client",
-            "args": [],
+            "program": "${workspaceFolder}/out/chessboard_producer",
+            "args": ["--device", "/dev/video10"],
             "cwd": "${workspaceFolder}",
             "environment": [],
             "externalConsole": false,
@@ -22,34 +22,12 @@
             "preLaunchTask": "cmake: build (Debug)"
         },
         {
-            "name": "Debug camera_app",
+            "name": "Debug face_detect",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/out/camera_app",
-            "args": [],
-            "cwd": "${workspaceFolder}",
-            "environment": [],
-            "externalConsole": false,
-            "MIMode": "gdb",
-            "miDebuggerPath": "/usr/bin/gdb",
-            "setupCommands": [
-                {
-                    "description": "Enable pretty-printing for gdb",
-                    "text": "-enable-pretty-printing",
-                    "ignoreFailures": true
-                }
-            ],
-            "preLaunchTask": "cmake: build (Debug)"
-        },
-        {
-            "name": "Debug unit_tests",
-            "type": "cppdbg",
-            "request": "launch",
-            "program": "${workspaceFolder}/build/unit_tests",
-            "args": [
-                "--gtest_filter=CameraTests.*"
-            ],
-            "cwd": "${workspaceFolder}",
+            "program": "${workspaceFolder}/out/face_detect",
+            "args": ["--device", "/dev/video10"],
+            "cwd": "${workspaceFolder}/out",
             "environment": [],
             "externalConsole": false,
             "MIMode": "gdb",

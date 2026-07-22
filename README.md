@@ -1,6 +1,6 @@
 # camera_app
 
-C++ camera / UVAP experimentation: webcam capture, virtual camera client, UVAP interfaces, and a V4L2 producer transport.
+UVAP experimentation: VAL-shaped interfaces, V4L2 producer transport, synthetic chessboard producer, and a sample face-detect consumer.
 
 ## Dependencies
 
@@ -13,13 +13,14 @@ Optional (face detect example):
 
 - `libtensorflow-lite-dev`
 - `libflatbuffers-dev`
+- Qt5 Widgets (`qtbase5-dev`)
 
 Ubuntu example:
 
 ```bash
 sudo apt install cmake build-essential libopencv-dev
-# optional:
-sudo apt install libtensorflow-lite-dev libflatbuffers-dev
+# optional (face_detect):
+sudo apt install libtensorflow-lite-dev libflatbuffers-dev qtbase5-dev
 ```
 
 ## Build
@@ -31,7 +32,7 @@ cmake -B build -DENABLE_FACE_DETECTION=OFF
 cmake --build build -j$(nproc)
 ```
 
-With face detection (when TFLite is installed):
+With face detection (when TFLite + Qt are installed):
 
 ```bash
 cmake -B build -DENABLE_FACE_DETECTION=ON
@@ -40,18 +41,10 @@ cmake --build build -j$(nproc)
 
 Binaries land in `out/`:
 
-- `camera_app`
-- `virtcam_client`
 - `chessboard_producer`
 - `face_detect` (only if face detection is enabled)
 
 The V4L2 transport library is built as `v4l2_transport` inside the build tree (`transport/v4l2`).
-
-## Tests
-
-```bash
-cd build && ctest --output-on-failure
-```
 
 ## Chessboard producer (UVAP synthetic VAL)
 
@@ -97,7 +90,5 @@ GUI: Qt window with resolution combo, FPS spinbox, and **Apply**. On apply the c
 closes capture, arms the new format on the loopback device, then reopens.
 
 Run from `out/` so the default model at `out/models/face_detection_short_range.tflite` is found.
-Requires Qt5 Widgets (`libqt5widgets5` / `qtbase5-dev`).
 
 Typical demo: start `chessboard_producer`, start `face_detect --device /dev/video10`, change resolution/FPS, click **Apply**.
-
