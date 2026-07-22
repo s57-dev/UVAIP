@@ -7,6 +7,7 @@
 #include <chrono>
 #include <mutex>
 #include <stop_token>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -17,7 +18,7 @@ private:
     cv::Mat frame;
 
     int frameIndex;
-    int deviceID_;
+    std::string device_;
     CameraConfiguration config_;
     std::chrono::high_resolution_clock::time_point startTime;
 
@@ -35,7 +36,8 @@ private:
     void joinWorker();
 
 public:
-    Camera(int deviceID, const CameraConfiguration& config = CameraConfiguration{});
+    explicit Camera(int deviceID, const CameraConfiguration& config = CameraConfiguration{});
+    explicit Camera(std::string device, const CameraConfiguration& config = CameraConfiguration{});
 
     void setCallback(ICallback* cb);
 

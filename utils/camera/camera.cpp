@@ -1,8 +1,12 @@
 #include "camera.h"
 #include "CameraError.h"
 
+#include <algorithm>
+#include <cctype>
+#include <chrono>
 #include <iostream>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace std;
@@ -32,7 +36,15 @@ const std::vector<CameraConfiguration>& supportedCameraConfigs()
 }
 
 Camera::Camera(int deviceID, const CameraConfiguration& config)
-    : camera(), frameIndex(0), deviceID_(deviceID), config_(config)
+    : Camera(std::to_string(deviceID), config)
+{
+}
+
+Camera::Camera(std::string device, const CameraConfiguration& config)
+    : camera()
+    , frameIndex(0)
+    , device_(std::move(device))
+    , config_(config)
 {
 }
 
@@ -96,9 +108,25 @@ void Camera::joinWorker()
 
 void Camera::open()
 {
-    if (!camera.open(deviceID_))
+    bool opened = false;
+    const bool numeric =
+        !device_.empty() &&
+        std::all_of(device_.begin(), device_.end(), [](unsigned char c) {
+            return std::isdigit(c) != 0;
+        });
+
+    if (numeric)
     {
-        throw CameraError("Could not open camera device " + std::to_string(deviceID_));
+        opened = camera.open(std::stoi(device_));
+    }
+    else
+    {
+        opened = camera.open(device_, cv::CAP_V4L2);
+    }
+
+    if (!opened)
+    {
+        throw CameraError("Could not open camera device " + device_);
     }
 
     applyConfiguration();
@@ -157,25 +185,37 @@ void Camera::setCallback(ICallback* cb)
 
 void Camera::captureLoop(std::stop_token stopToken)
 {
-    while (!stopToken.stop_requested())
+    try
     {
-        camera >> frame;
-
-        const CameraConfiguration config = getConfigSnapshot();
-        cout << "Resolution: " << frame.cols << "x" << frame.rows
-             << " | Frame rate: " << config.frameRate << " fps" << endl;
-
-        if (frame.empty())
+        while (!stopToken.stop_requested())
         {
-            throw CameraError("Empty frame from device " + std::to_string(deviceID_));
-        }
+            camera >> frame;
 
-        if (callback && !callback->onFrameCapture(frame))
-        {
-            break;
-        }
+            if (frame.empty())
+            {
+                if (stopToken.stop_requested())
+                {
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                continue;
+            }
 
-        frameIndex++;
+            const CameraConfiguration config = getConfigSnapshot();
+            cout << "Resolution: " << frame.cols << "x" << frame.rows
+                 << " | Frame rate: " << config.frameRate << " fps" << endl;
+
+            if (callback && !callback->onFrameCapture(frame))
+            {
+                break;
+            }
+
+            frameIndex++;
+        }
+    }
+    catch (const std::exception& ex)
+    {
+        std::cerr << "Camera capture stopped: " << ex.what() << std::endl;
     }
 }
 

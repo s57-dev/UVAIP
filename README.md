@@ -83,7 +83,10 @@ Pipeline: producer CPU pool (1280×720 chessboard) → software scaler → V4L2 
 
 ```bash
 cd out
-./face_detect
+./face_detect --device 0
+./face_detect --device /dev/video10
 ```
 
-Run from `out/` so the model at `out/models/face_detection_short_range.tflite` is found. Press `q` then Enter to quit.
+Options: `--device PATH|INDEX`, `--model PATH`, `--width N`, `--height N`, `--fps N`.
+
+Run from `out/` so the default model at `out/models/face_detection_short_range.tflite` is found. Press `q` then Enter to quit.

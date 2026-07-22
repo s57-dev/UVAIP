@@ -6,9 +6,76 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <iostream>
 #include <string>
 #include <thread>
+
+namespace
+{
+
+struct Options
+{
+    std::string device = "0";
+    std::string modelPath = "models/face_detection_short_range.tflite";
+    int width = 640;
+    int height = 480;
+    int fps = 30;
+};
+
+void printUsage(const char* argv0)
+{
+    std::cerr
+        << "Usage: " << argv0
+        << " [--device PATH|INDEX] [--model PATH] [--width N] [--height N] [--fps N]\n"
+        << "  Face detection client over an OpenCV/V4L2 capture device.\n"
+        << "  Examples:\n"
+        << "    " << argv0 << " --device 0\n"
+        << "    " << argv0 << " --device /dev/video10\n";
+}
+
+Options parseArgs(int argc, char** argv)
+{
+    Options opt;
+    for (int i = 1; i < argc; ++i)
+    {
+        const std::string arg = argv[i];
+        if (arg == "--help" || arg == "-h")
+        {
+            printUsage(argv[0]);
+            std::exit(0);
+        }
+        if (arg == "--device" && i + 1 < argc)
+        {
+            opt.device = argv[++i];
+            continue;
+        }
+        if (arg == "--model" && i + 1 < argc)
+        {
+            opt.modelPath = argv[++i];
+            continue;
+        }
+        if (arg == "--width" && i + 1 < argc)
+        {
+            opt.width = std::stoi(argv[++i]);
+            continue;
+        }
+        if (arg == "--height" && i + 1 < argc)
+        {
+            opt.height = std::stoi(argv[++i]);
+            continue;
+        }
+        if (arg == "--fps" && i + 1 < argc)
+        {
+            opt.fps = std::stoi(argv[++i]);
+            continue;
+        }
+        std::cerr << "Unknown argument: " << arg << "\n";
+        printUsage(argv[0]);
+        std::exit(1);
+    }
+    return opt;
+}
 
 class FrameCapture : public ICallback
 {
@@ -35,19 +102,20 @@ private:
     FrameQueue& frameQueue;
 };
 
+} // namespace
+
 int main(int argc, char** argv)
 {
-    (void)argc;
-    (void)argv;
-
     try
     {
+        const Options opt = parseArgs(argc, argv);
+
         FrameQueue frameQueue;
         std::atomic<bool> quit{false};
 
-        std::thread inputThread([&quit]() {
-            std::cout << "Capturing frames with face detection. Press q then Enter to quit."
-                      << std::endl;
+        std::thread inputThread([&quit, &opt]() {
+            std::cout << "Face detect on " << opt.device
+                      << ". Press q then Enter to quit." << std::endl;
             char c = 0;
             std::cin >> c;
             if (c == 'q')
@@ -57,14 +125,13 @@ int main(int argc, char** argv)
         });
 
         CameraConfiguration config;
-        config.width = 640;
-        config.height = 480;
-        config.frameRate = 30;
+        config.width = opt.width;
+        config.height = opt.height;
+        config.frameRate = opt.fps;
 
-        const std::string modelPath = "models/face_detection_short_range.tflite";
-        FaceDetector faceDetector(modelPath);
+        FaceDetector faceDetector(opt.modelPath);
 
-        Camera camera(0, config);
+        Camera camera(opt.device, config);
         FrameCapture capture(frameQueue);
 
         camera.setCallback(&capture);
@@ -108,6 +175,11 @@ int main(int argc, char** argv)
         return 0;
     }
     catch (const CameraError& e)
+    {
+        std::cerr << e.what() << std::endl;
+        return 1;
+    }
+    catch (const std::exception& e)
     {
         std::cerr << e.what() << std::endl;
         return 1;
