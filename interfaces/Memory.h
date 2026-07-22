@@ -14,6 +14,22 @@ enum class MemoryType
     IonHandle,
 };
 
+/**
+ * Ownership / lifecycle of a buffer in the producer–transport–consumer cycle.
+ * Aligns with AOSP BufferQueue-style naming; not every backend uses every state.
+ *
+ * Free      — available in the pool (typically no live IMemory)
+ * Dequeued  — owned by the producer after acquire / DQBUF; may be filled
+ * Queued    — owned by the transport/device after push / QBUF
+ * Acquired  — owned by a consumer (future consumer-side path)
+ */
+enum class BufferState
+{
+    Free,
+    Dequeued,
+    Queued,
+    Acquired,
+};
 
 /**
  * Single memory interface for a frame payload.
@@ -30,6 +46,7 @@ class IMemory
 public:
     virtual ~IMemory() = default;
 
+    /** Size of the memory in bytes. */
     virtual std::size_t sizeBytes() const = 0;
 
     /** True when handle() is a CPU-accessible pointer. */
@@ -38,7 +55,11 @@ public:
     /** Opaque resource handle (CPU pointer or platform-native id). */
     virtual void* handle() const = 0;
 
+    /** Type of the memory. */
     virtual MemoryType type() const = 0;
+
+    /** Current ownership state in the buffer cycle. */
+    virtual BufferState state() const = 0;
 };
 
 using MemoryPtr = std::shared_ptr<IMemory>;

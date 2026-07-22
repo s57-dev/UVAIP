@@ -55,6 +55,9 @@ target_link_libraries(virtcam_lib PUBLIC ${OpenCV_LIBS} Threads::Threads)
 # UVAP V4L2 producer transport (VIDEO_OUTPUT / v4l2loopback)
 add_subdirectory(transport/v4l2)
 
+# Synthetic chessboard producer → scaler → V4L2 sink
+add_subdirectory(examples/producer/chessboard)
+
 # Webcam application
 add_executable(camera_app camera_app_src/main.cpp)
 target_link_libraries(camera_app PRIVATE camera_lib)

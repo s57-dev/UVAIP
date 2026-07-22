@@ -13,8 +13,15 @@ struct SinkConfig
 };
 
 /**
- * Transport port: publish frames to a consumer-facing delivery path.
- * V4L2 loopback is one driver; others may be in-process queues, etc.
+ * Transport port with explicit buffer cycling (no copies).
+ *
+ * Typical producer loop:
+ *   1. acquireFrame()  — take a free buffer from the sink pool
+ *   2. fill frame memory (scaler / producer writes in place)
+ *   3. pushFrame()     — hand the same buffer back to the transport
+ *
+ * Buffers return to the pool after the device releases them (DQBUF), ready
+ * for the next acquireFrame().
  */
 class IFrameSink
 {
@@ -28,10 +35,17 @@ public:
     virtual void stop() = 0;
 
     /**
-     * Publish one frame.
-     * Returns false on backpressure, not started, or incompatible memory.
+     * Obtain a writable buffer owned by this sink.
+     * Returns false on backpressure (all buffers in flight) or if not started.
      */
-    virtual bool pushFrame(const Frame& frame) = 0;
+    virtual bool acquireFrame(Frame& out) = 0;
+
+    /**
+     * Queue a previously acquired frame to the transport (moves ownership).
+     * The Frame must come from acquireFrame() on this sink; no pixel copy.
+     * Returns false if the frame is not from this sink's pool.
+     */
+    virtual bool pushFrame(Frame frame) = 0;
 };
 
 } // namespace uvap

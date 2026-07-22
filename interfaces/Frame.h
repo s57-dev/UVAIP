@@ -82,6 +82,11 @@ public:
         return memory_ ? memory_->handle() : nullptr;
     }
 
+    BufferState bufferState() const
+    {
+        return memory_ ? memory_->state() : BufferState::Free;
+    }
+
 private:
     FrameInfo info_{};
     MemoryPtr memory_;

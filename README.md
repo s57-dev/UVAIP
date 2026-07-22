@@ -42,6 +42,7 @@ Binaries land in `out/`:
 
 - `camera_app`
 - `virtcam_client`
+- `chessboard_producer`
 - `face_detect` (only if face detection is enabled)
 
 The V4L2 transport library is built as `v4l2_transport` inside the build tree (`transport/v4l2`).
@@ -51,6 +52,32 @@ The V4L2 transport library is built as `v4l2_transport` inside the build tree (`
 ```bash
 cd build && ctest --output-on-failure
 ```
+
+## Chessboard producer (UVAP synthetic VAL)
+
+Requires [v4l2loopback](https://github.com/umlaeute/v4l2loopback), e.g.:
+
+```bash
+sudo modprobe v4l2loopback devices=1 video_nr=10 exclusive_caps=1
+```
+
+Then:
+
+```bash
+cmake --build build --target chessboard_producer
+./out/chessboard_producer --device /dev/video10
+```
+
+In another terminal, consume the virtual camera:
+
+```bash
+ffplay -f v4l2 /dev/video10
+# or: opencv VideoCapture on device 10
+```
+
+Press `q` then Enter in the producer to quit.
+
+Pipeline: producer CPU pool (1280×720 chessboard) → software scaler → V4L2 sink pool (640×480) → v4l2loopback.
 
 ## Face detect example
 
