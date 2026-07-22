@@ -1,0 +1,51 @@
+#pragma once
+
+#include "Frame.h"
+
+#include <functional>
+
+namespace uvap
+{
+
+/**
+ * Configurable frame transform: scale, color convert, crop, rotate (REQ-04).
+ */
+struct ScaleConfig
+{
+    int width = 0;
+    int height = 0;
+    PixelFormat outputFormat = PixelFormat::Rgb24;
+    // Crop rectangle in source coordinates; all zeros means full frame.
+    int cropX = 0;
+    int cropY = 0;
+    int cropW = 0;
+    int cropH = 0;
+
+    // Supported values: 0, 90, 180, 270.
+    int rotationDegrees = 0;
+};
+
+/**
+ * Completion callback after scaling.
+ * Invoked with the input and output frames (and any shared memory they hold).
+ */
+using ScaleCallback = std::function<void(const Frame& input, const Frame& output)>;
+
+/**
+ * Interface for a frame scaler.
+ */
+class IScaler
+{
+public:
+    virtual ~IScaler() = default;
+
+    virtual void configure(const ScaleConfig& config) = 0;
+    virtual ScaleConfig configuration() const = 0;
+
+    /** Transform input according to the current ScaleConfig into output. */
+    virtual Frame scale(const Frame& input,
+                        const Frame& output,
+                        const ScaleCallback& callback) = 0;
+};
+
+} // namespace uvap
