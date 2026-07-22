@@ -84,7 +84,7 @@ bool ChessboardProducer::getFrame(uvap::Frame& out, std::chrono::milliseconds ti
 
 void ChessboardProducer::drawChessboard(uvap::Frame& frame, std::uint64_t frameIndex)
 {
-    auto* data = static_cast<std::uint8_t*>(frame.handle());
+    auto* data = static_cast<std::uint8_t*>(frame.data());
     if (data == nullptr)
     {
         throw std::runtime_error("ChessboardProducer: null frame handle");

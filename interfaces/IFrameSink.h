@@ -8,8 +8,8 @@ namespace uvap
 struct SinkConfig
 {
     FrameInfo format{};
-    // Transport hint (e.g. V4L2 REQBUFS count).
-    int bufferCount = 4;
+    // Maximum number of frames that may be in the sink queue generation.
+    int queueDepth = 4;
 };
 
 /**
@@ -43,7 +43,9 @@ public:
     /**
      * Queue a previously acquired frame to the transport (moves ownership).
      * The Frame must come from acquireFrame() on this sink; no pixel copy.
-     * Returns false if the frame is not from this sink's pool.
+     * Returns false only for temporary transport backpressure.
+     * Throws std::invalid_argument for a foreign or incompatible frame and
+     * std::logic_error when called outside the streaming lifecycle.
      */
     virtual bool pushFrame(Frame frame) = 0;
 };

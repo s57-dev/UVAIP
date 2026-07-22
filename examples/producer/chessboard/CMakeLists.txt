@@ -8,13 +8,12 @@ add_executable(chessboard_producer
 target_include_directories(chessboard_producer
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/interfaces
-        ${CMAKE_SOURCE_DIR}/transport/v4l2
 )
 
 target_link_libraries(chessboard_producer
     PRIVATE
-        v4l2_transport
+        uvap::v4l2_transport
+        uvap::pipeline
         ${OpenCV_LIBS}
         Threads::Threads
 )

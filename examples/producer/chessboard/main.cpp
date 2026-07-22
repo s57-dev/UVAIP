@@ -1,10 +1,13 @@
 #include "ChessboardProducer.h"
+#include "FramePipeline.h"
 #include "SoftwareScaler.h"
+#include "V4l2LoopbackSession.h"
 #include "V4l2Sink.h"
 
 #include <atomic>
 #include <chrono>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 
@@ -98,49 +101,43 @@ void configurePipeline(uvap::v4l2::V4l2Sink& sink,
     sinkConfig.format.width = width;
     sinkConfig.format.height = height;
     sinkConfig.format.pixelFormat = uvap::PixelFormat::Bgr24;
-    sinkConfig.bufferCount = sinkPool;
+    sinkConfig.queueDepth = sinkPool;
     sink.configure(sinkConfig);
 
     producer.setFrameRate(fps);
 }
 
-bool pushOneFrame(uvap::v4l2::V4l2Sink& sink,
-                  uvap::example::SoftwareScaler& scaler,
-                  uvap::example::ChessboardProducer& producer)
+void applyNegotiatedSinkFormat(uvap::v4l2::V4l2Sink& sink,
+                               uvap::example::SoftwareScaler& scaler,
+                               int& width,
+                               int& height)
 {
-    uvap::Frame sinkFrame;
-    if (!sink.acquireFrame(sinkFrame))
+    const uvap::FrameInfo& format = sink.configuration().format;
+    if (format.pixelFormat != uvap::PixelFormat::Bgr24)
     {
-        return false;
+        throw std::runtime_error(
+            "chessboard_producer: sink did not negotiate Bgr24");
     }
 
-    uvap::Frame producerFrame;
-    if (!producer.getFrame(producerFrame, std::chrono::milliseconds(100)))
-    {
-        return false;
-    }
-
-    // Scale into the sink buffer, then drop the local alias before push so the
-    // sink Frame is the sole owner (pushFrame requires use_count == 1).
-    uvap::Frame filled = scaler.scale(
-        producerFrame,
-        sinkFrame,
-        [](const uvap::Frame&, const uvap::Frame&) {});
-    producerFrame = uvap::Frame{};
-    sinkFrame = uvap::Frame{};
-
-    return sink.pushFrame(std::move(filled));
+    width = format.width;
+    height = format.height;
+    uvap::ScaleConfig scaleConfig{};
+    scaleConfig.width = width;
+    scaleConfig.height = height;
+    scaleConfig.outputFormat = format.pixelFormat;
+    scaler.configure(scaleConfig);
 }
 
 bool streamUntilIdle(uvap::v4l2::V4l2Sink& sink,
-                     uvap::example::SoftwareScaler& scaler,
+                     uvap::v4l2::V4l2LoopbackSession& loopback,
+                     uvap::FramePipeline& pipeline,
                      uvap::example::ChessboardProducer& producer,
                      std::atomic<bool>& quit)
 {
     std::uint32_t clientCount = 1;
     while (!quit && clientCount > 0)
     {
-        while (auto ev = sink.pollClientUsage())
+        while (auto ev = loopback.pollClientUsage())
         {
             clientCount = ev->count;
         }
@@ -157,9 +154,10 @@ bool streamUntilIdle(uvap::v4l2::V4l2Sink& sink,
                 producer.setFrameRate(fps);
             }
 
-            if (!pushOneFrame(sink, scaler, producer))
+            if (pipeline.pump(std::chrono::milliseconds(100)) !=
+                uvap::PumpResult::FrameQueued)
             {
-                if (auto ev = sink.waitClientUsage(std::chrono::milliseconds(20)))
+                if (auto ev = loopback.waitClientUsage(std::chrono::milliseconds(20)))
                 {
                     clientCount = ev->count;
                 }
@@ -195,10 +193,12 @@ int main(int argc, char** argv)
             producerFormat, opt.producerPool, opt.fps);
         uvap::example::SoftwareScaler scaler;
         uvap::v4l2::V4l2Sink sink(opt.device);
+        uvap::v4l2::V4l2LoopbackSession loopback(sink);
+        uvap::FramePipeline pipeline(producer, scaler, sink);
 
         sink.openDevice();
-        sink.subscribeClientUsage();
-        while (sink.pollClientUsage())
+        loopback.subscribeClientUsage();
+        while (loopback.pollClientUsage())
         {
         }
 
@@ -220,6 +220,7 @@ int main(int argc, char** argv)
 
         configurePipeline(sink, scaler, producer, sinkWidth, sinkHeight, fps, opt.sinkPool);
         sink.start();
+        applyNegotiatedSinkFormat(sink, scaler, sinkWidth, sinkHeight);
         sink.setStreamParm({fps, 1});
         std::cout << "chessboard_producer: streaming " << sinkWidth << "x" << sinkHeight
                   << " @ " << fps << " fps\n";
@@ -229,11 +230,11 @@ int main(int argc, char** argv)
             std::uint32_t clientCount = 0;
             try
             {
-                if (auto ev = sink.waitClientUsage(std::chrono::milliseconds(100)))
+                if (auto ev = loopback.waitClientUsage(std::chrono::milliseconds(100)))
                 {
                     clientCount = ev->count;
                 }
-                while (auto ev = sink.pollClientUsage())
+                while (auto ev = loopback.pollClientUsage())
                 {
                     clientCount = ev->count;
                 }
@@ -259,7 +260,7 @@ int main(int argc, char** argv)
 
             std::cout << "chessboard_producer: client attached\n";
             sink.recycleBuffers();
-            if (!streamUntilIdle(sink, scaler, producer, quit))
+            if (!streamUntilIdle(sink, loopback, pipeline, producer, quit))
             {
                 break;
             }
@@ -286,6 +287,7 @@ int main(int argc, char** argv)
                 configurePipeline(
                     sink, scaler, producer, sinkWidth, sinkHeight, fps, opt.sinkPool);
                 sink.start();
+                applyNegotiatedSinkFormat(sink, scaler, sinkWidth, sinkHeight);
                 sink.setStreamParm({fps, 1});
                 std::cout << "chessboard_producer: restreaming " << sinkWidth << "x"
                           << sinkHeight << " @ " << fps << " fps\n";
@@ -303,6 +305,7 @@ int main(int argc, char** argv)
                     configurePipeline(
                         sink, scaler, producer, sinkWidth, sinkHeight, fps, opt.sinkPool);
                     sink.start();
+                    applyNegotiatedSinkFormat(sink, scaler, sinkWidth, sinkHeight);
                 }
                 catch (const std::exception& recoverEx)
                 {

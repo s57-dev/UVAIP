@@ -28,16 +28,16 @@ int cvTypeFor(uvap::PixelFormat format)
 
 cv::Mat asMat(const uvap::Frame& frame)
 {
-    if (!frame.isCpuMapped() || frame.handle() == nullptr)
+    if (!frame.isCpuMapped() || frame.data() == nullptr)
     {
         throw std::runtime_error("SoftwareScaler: frame is not CPU-mapped");
     }
 
     const auto& info = frame.info();
-    return cv::Mat(info.height,
-                   info.width,
-                   cvTypeFor(info.pixelFormat),
-                   frame.handle());
+    const std::size_t step =
+        info.strideBytes > 0 ? static_cast<std::size_t>(info.strideBytes) : cv::Mat::AUTO_STEP;
+    return cv::Mat(
+        info.height, info.width, cvTypeFor(info.pixelFormat), frame.data(), step);
 }
 
 } // namespace
@@ -48,9 +48,10 @@ void SoftwareScaler::configure(const uvap::ScaleConfig& config)
     {
         throw std::runtime_error("SoftwareScaler: invalid output dimensions");
     }
-    if (config.rotationDegrees != 0)
+    if (config.rotationDegrees != 0 && config.rotationDegrees != 90 &&
+        config.rotationDegrees != 180 && config.rotationDegrees != 270)
     {
-        throw std::runtime_error("SoftwareScaler: rotation is not supported in v1");
+        throw std::runtime_error("SoftwareScaler: rotation must be 0, 90, 180, or 270");
     }
     config_ = config;
 }
@@ -60,9 +61,7 @@ uvap::ScaleConfig SoftwareScaler::configuration() const
     return config_;
 }
 
-uvap::Frame SoftwareScaler::scale(const uvap::Frame& input,
-                                  const uvap::Frame& output,
-                                  const uvap::ScaleCallback& callback)
+void SoftwareScaler::scale(const uvap::Frame& input, uvap::Frame& output)
 {
     if (config_.width <= 0 || config_.height <= 0)
     {
@@ -124,19 +123,28 @@ uvap::Frame SoftwareScaler::scale(const uvap::Frame& input,
         }
     }
 
-    cv::resize(converted, dst, dst.size(), 0, 0, cv::INTER_LINEAR);
-
-    // Preserve timing / index metadata on the output buffer.
-    uvap::Frame result = output;
-    result.info().timestampNs = input.info().timestampNs;
-    result.info().frameIndex = input.info().frameIndex;
-
-    if (callback)
+    cv::Mat rotated = converted;
+    switch (config_.rotationDegrees)
     {
-        callback(input, result);
+    case 0:
+        break;
+    case 90:
+        cv::rotate(converted, rotated, cv::ROTATE_90_CLOCKWISE);
+        break;
+    case 180:
+        cv::rotate(converted, rotated, cv::ROTATE_180);
+        break;
+    case 270:
+        cv::rotate(converted, rotated, cv::ROTATE_90_COUNTERCLOCKWISE);
+        break;
+    default:
+        throw std::logic_error("SoftwareScaler: invalid configured rotation");
     }
 
-    return result;
+    cv::resize(rotated, dst, dst.size(), 0, 0, cv::INTER_LINEAR);
+
+    output.info().timestampNs = input.info().timestampNs;
+    output.info().frameIndex = input.info().frameIndex;
 }
 
 } // namespace uvap::example

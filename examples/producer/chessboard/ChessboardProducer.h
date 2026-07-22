@@ -2,6 +2,7 @@
 
 #include "CpuBufferPool.h"
 #include "IFrameProducer.h"
+#include "IFrameRateController.h"
 
 #include <chrono>
 #include <cstdint>
@@ -13,7 +14,8 @@ namespace uvap::example
 /**
  * Synthetic IFrameProducer: animated Bgr24 chessboard from a CPU buffer pool.
  */
-class ChessboardProducer final : public uvap::IFrameProducer
+class ChessboardProducer final : public uvap::IFrameProducer,
+                                 public uvap::IFrameRateController
 {
 public:
     ChessboardProducer(uvap::FrameInfo format, int bufferCount, int frameRate);
@@ -25,8 +27,8 @@ public:
     bool getFrame(uvap::Frame& out, std::chrono::milliseconds timeout) override;
     uvap::FrameInfo frameInfo() const override;
 
-    void setFrameRate(int frameRate);
-    int frameRate() const { return frameRate_; }
+    void setFrameRate(int frameRate) override;
+    int frameRate() const override { return frameRate_; }
 
 private:
     static void drawChessboard(uvap::Frame& frame, std::uint64_t frameIndex);

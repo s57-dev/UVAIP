@@ -1,16 +1,17 @@
-# camera_app
+# UVAP
 
-UVAP experimentation: VAL-shaped interfaces, V4L2 producer transport, synthetic chessboard producer, and a sample face-detect consumer.
+Unified Video AI Pipeline library and reference implementation: portable VAL contracts,
+a Linux V4L2 producer transport, a synthetic producer, and sample consumers.
 
 ## Dependencies
 
 - CMake ≥ 3.14
 - C++20 compiler
-- OpenCV development packages
 - Linux V4L2 headers (usually via kernel headers)
 
-Optional (face detect example):
+Optional (examples):
 
+- OpenCV development packages
 - `libtensorflow-lite-dev`
 - `libflatbuffers-dev`
 - Qt5 Widgets (`qtbase5-dev`)
@@ -30,6 +31,15 @@ From the repo root:
 ```bash
 cmake -B build -DENABLE_FACE_DETECTION=OFF
 cmake --build build -j$(nproc)
+ctest --test-dir build --output-on-failure
+```
+
+Build and install only the reusable library, without OpenCV:
+
+```bash
+cmake -B build -DUVAP_BUILD_EXAMPLES=OFF -DBUILD_TESTING=ON
+cmake --build build
+cmake --install build --prefix /desired/prefix
 ```
 
 With face detection (when TFLite + Qt are installed):
@@ -44,7 +54,14 @@ Binaries land in `out/`:
 - `chessboard_producer`
 - `face_detect` (only if face detection is enabled)
 
-The V4L2 transport library is built as `v4l2_transport` inside the build tree (`transport/v4l2`).
+Installed CMake targets:
+
+- `uvap::core` — move-only frames, typed memory access, producer/scaler/sink contracts
+- `uvap::v4l2_transport` — negotiated MMAP VIDEO_OUTPUT queues
+
+`V4l2LoopbackSession` isolates the private `CLIENT_USAGE` extension from
+`V4l2Sink`. Sink operations are single-thread confined; acquired frames are
+exclusive move-only leases and must be returned before queue recycling or teardown.
 
 ## Chessboard producer (UVAP synthetic VAL)
 

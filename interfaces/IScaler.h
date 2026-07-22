@@ -2,8 +2,6 @@
 
 #include "Frame.h"
 
-#include <functional>
-
 namespace uvap
 {
 
@@ -26,12 +24,6 @@ struct ScaleConfig
 };
 
 /**
- * Completion callback after scaling.
- * Invoked with the input and output frames (and any shared memory they hold).
- */
-using ScaleCallback = std::function<void(const Frame& input, const Frame& output)>;
-
-/**
  * Interface for a frame scaler.
  */
 class IScaler
@@ -43,9 +35,7 @@ public:
     virtual ScaleConfig configuration() const = 0;
 
     /** Transform input according to the current ScaleConfig into output. */
-    virtual Frame scale(const Frame& input,
-                        const Frame& output,
-                        const ScaleCallback& callback) = 0;
+    virtual void scale(const Frame& input, Frame& output) = 0;
 };
 
 } // namespace uvap

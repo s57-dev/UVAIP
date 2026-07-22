@@ -5,13 +5,13 @@
 #include <linux/videodev2.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
-#include <sys/poll.h>
 #include <fcntl.h>
 #include <unistd.h>
 
 #include <cerrno>
-#include <cstring>
+#include <limits>
 #include <stdexcept>
+#include <system_error>
 #include <utility>
 
 namespace uvap::v4l2
@@ -19,9 +19,20 @@ namespace uvap::v4l2
 namespace
 {
 
-std::string errnoMessage(const std::string& prefix)
+int ioctlRetry(int fd, unsigned long request, void* argument)
 {
-    return prefix + ": " + std::strerror(errno);
+    int rc = 0;
+    do
+    {
+        rc = ::ioctl(fd, request, argument);
+    } while (rc < 0 && errno == EINTR);
+    return rc;
+}
+
+[[noreturn]] void throwSystemError(const std::string& operation)
+{
+    const int error = errno;
+    throw std::system_error(error, std::generic_category(), operation);
 }
 
 } // namespace
@@ -32,7 +43,7 @@ std::string errnoMessage(const std::string& prefix)
  * State machine (producer / transport side):
  *   Dequeued — after acquireFrame; producer may fill
  *   Queued   — after pushFrame / QBUF; device owns until DQBUF
- * Destroying while Dequeued returns the slot to Free in the pool.
+ * Destroying a dequeued lease returns the slot to Free in the pool.
  */
 class V4l2Sink::BufferMemory final : public uvap::IMemory
 {
@@ -40,15 +51,14 @@ public:
     BufferMemory(std::shared_ptr<BufferPool> pool, std::uint32_t index)
         : pool_(std::move(pool))
         , index_(index)
-        , state_(uvap::BufferState::Dequeued)
     {
     }
 
     ~BufferMemory() override
     {
-        if (state_ == uvap::BufferState::Dequeued && pool_)
+        if (pool_)
         {
-            pool_->returnFree(index_);
+            pool_->releaseLease(index_);
         }
     }
 
@@ -57,14 +67,14 @@ public:
 
     std::size_t sizeBytes() const override
     {
-        return pool_->buffers[index_].length;
+        return pool_->slots[index_].mapping.length;
     }
 
     bool isCpuMapped() const override { return true; }
 
-    void* handle() const override
+    void* data() const override
     {
-        return pool_->buffers[index_].start;
+        return pool_->slots[index_].mapping.start;
     }
 
     uvap::MemoryType type() const override
@@ -72,7 +82,13 @@ public:
         return uvap::MemoryType::CpuMapped;
     }
 
-    uvap::BufferState state() const override { return state_; }
+    uvap::BufferState state() const override
+    {
+        std::lock_guard<std::mutex> lock(pool_->mutex);
+        return pool_->slots[index_].state == BufferPool::SlotState::Queued
+                   ? uvap::BufferState::Queued
+                   : uvap::BufferState::Dequeued;
+    }
 
     std::uint32_t index() const { return index_; }
 
@@ -81,21 +97,92 @@ public:
         return pool_.get() == pool;
     }
 
-    void transitionTo(uvap::BufferState next)
-    {
-        state_ = next;
-    }
-
 private:
     std::shared_ptr<BufferPool> pool_;
     std::uint32_t index_ = 0;
-    uvap::BufferState state_ = uvap::BufferState::Dequeued;
 };
 
-void V4l2Sink::BufferPool::returnFree(std::uint32_t index)
+V4l2Sink::BufferPool::~BufferPool()
+{
+    for (Slot& slot : slots)
+    {
+        if (slot.mapping.start != nullptr && slot.mapping.length > 0)
+        {
+            ::munmap(slot.mapping.start, slot.mapping.length);
+        }
+    }
+}
+
+bool V4l2Sink::BufferPool::acquireFree(std::uint32_t& index)
 {
     std::lock_guard<std::mutex> lock(mutex);
-    freeIndices.push_back(index);
+    if (freeIndices.empty())
+    {
+        return false;
+    }
+    index = freeIndices.front();
+    freeIndices.pop_front();
+    if (index >= slots.size() || slots[index].state != SlotState::Free)
+    {
+        throw std::logic_error("V4l2Sink: corrupt free-buffer queue");
+    }
+    slots[index].state = SlotState::Dequeued;
+    return true;
+}
+
+bool V4l2Sink::BufferPool::transition(std::uint32_t index,
+                                      SlotState from,
+                                      SlotState to)
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    if (index >= slots.size() || slots[index].state != from)
+    {
+        return false;
+    }
+    slots[index].state = to;
+    if (to == SlotState::Free)
+    {
+        freeIndices.push_back(index);
+    }
+    return true;
+}
+
+void V4l2Sink::BufferPool::releaseLease(std::uint32_t index) noexcept
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    if (index < slots.size() && slots[index].state == SlotState::Dequeued)
+    {
+        slots[index].state = SlotState::Free;
+        freeIndices.push_back(index);
+    }
+}
+
+void V4l2Sink::BufferPool::reclaimAllQueued()
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    freeIndices.clear();
+    for (std::uint32_t i = 0; i < slots.size(); ++i)
+    {
+        if (slots[i].state == SlotState::Dequeued)
+        {
+            throw std::logic_error("V4l2Sink: cannot reclaim an outstanding frame");
+        }
+        slots[i].state = SlotState::Free;
+        freeIndices.push_back(i);
+    }
+}
+
+bool V4l2Sink::BufferPool::hasDequeued() const
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    for (const Slot& slot : slots)
+    {
+        if (slot.state == SlotState::Dequeued)
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 V4l2Sink::V4l2Sink(std::string devicePath)
@@ -105,7 +192,15 @@ V4l2Sink::V4l2Sink(std::string devicePath)
 
 V4l2Sink::~V4l2Sink()
 {
-    stop();
+    try
+    {
+        stop();
+    }
+    catch (...)
+    {
+        // Outstanding Frames retain their BufferPool and mappings. Closing the
+        // device retires the queue; the final lease unmaps the pool safely.
+    }
     closeDevice();
 }
 
@@ -116,107 +211,57 @@ void V4l2Sink::openDevice()
         return;
     }
 
-    fd_ = ::open(devicePath_.c_str(), O_RDWR | O_NONBLOCK);
+    fd_ = ::open(devicePath_.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC);
     if (fd_ < 0)
     {
-        throw std::runtime_error(errnoMessage("V4l2Sink: open " + devicePath_));
+        throwSystemError("V4l2Sink: open " + devicePath_);
+    }
+
+    try
+    {
+        validateCapabilities();
+    }
+    catch (...)
+    {
+        ::close(fd_);
+        fd_ = -1;
+        throw;
+    }
+}
+
+void V4l2Sink::validateCapabilities()
+{
+    v4l2_capability capability{};
+    if (ioctlRetry(fd_, VIDIOC_QUERYCAP, &capability) < 0)
+    {
+        throwSystemError("V4l2Sink: VIDIOC_QUERYCAP");
+    }
+
+    const std::uint32_t caps =
+        (capability.capabilities & V4L2_CAP_DEVICE_CAPS) != 0
+            ? capability.device_caps
+            : capability.capabilities;
+    if ((caps & V4L2_CAP_VIDEO_OUTPUT) == 0)
+    {
+        throw std::runtime_error("V4l2Sink: device lacks single-plane VIDEO_OUTPUT");
+    }
+    if ((caps & V4L2_CAP_STREAMING) == 0)
+    {
+        throw std::runtime_error("V4l2Sink: device lacks streaming I/O");
     }
 }
 
 void V4l2Sink::closeDevice() noexcept
 {
+    streamOffNoexcept();
     releaseMappedBuffers();
     streaming_ = false;
-    clientUsageSubscribed_ = false;
+    negotiatedSizeImage_ = 0;
     if (fd_ >= 0)
     {
         ::close(fd_);
         fd_ = -1;
     }
-}
-
-void V4l2Sink::subscribeClientUsage()
-{
-    openDevice();
-
-    v4l2_event_subscription sub{};
-    sub.type = kV4l2EventPriClientUsage;
-    sub.flags = V4L2_EVENT_SUB_FL_SEND_INITIAL;
-    if (::ioctl(fd_, VIDIOC_SUBSCRIBE_EVENT, &sub) < 0)
-    {
-        throw std::runtime_error(errnoMessage("V4l2Sink: SUBSCRIBE_EVENT CLIENT_USAGE"));
-    }
-    clientUsageSubscribed_ = true;
-}
-
-std::optional<ClientUsageEvent> V4l2Sink::dequeueClientUsageEvent(bool nonblock)
-{
-    if (fd_ < 0)
-    {
-        return std::nullopt;
-    }
-
-    if (!nonblock)
-    {
-        // Caller already waited via poll.
-    }
-
-    v4l2_event ev{};
-    if (::ioctl(fd_, VIDIOC_DQEVENT, &ev) < 0)
-    {
-        // Empty queue: EAGAIN is the usual non-blocking code; some
-        // v4l2loopback/kernel combos return ENOENT instead.
-        if (errno == EAGAIN || errno == ENOENT)
-        {
-            return std::nullopt;
-        }
-        throw std::runtime_error(errnoMessage("V4l2Sink: VIDIOC_DQEVENT"));
-    }
-
-    if (ev.type != kV4l2EventPriClientUsage)
-    {
-        return std::nullopt;
-    }
-
-    ClientUsageEvent out{};
-    static_assert(sizeof(out.count) <= sizeof(ev.u.data));
-    std::memcpy(&out.count, ev.u.data, sizeof(out.count));
-    return out;
-}
-
-std::optional<ClientUsageEvent> V4l2Sink::pollClientUsage()
-{
-    return dequeueClientUsageEvent(true);
-}
-
-std::optional<ClientUsageEvent> V4l2Sink::waitClientUsage(std::chrono::milliseconds timeout)
-{
-    openDevice();
-    if (!clientUsageSubscribed_)
-    {
-        subscribeClientUsage();
-    }
-
-    pollfd pfd{};
-    pfd.fd = fd_;
-    pfd.events = POLLPRI;
-
-    const int timeoutMs = timeout.count() < 0 ? -1 : static_cast<int>(timeout.count());
-    const int rc = ::poll(&pfd, 1, timeoutMs);
-    if (rc < 0)
-    {
-        if (errno == EINTR)
-        {
-            return std::nullopt;
-        }
-        throw std::runtime_error(errnoMessage("V4l2Sink: poll CLIENT_USAGE"));
-    }
-    if (rc == 0)
-    {
-        return std::nullopt;
-    }
-
-    return dequeueClientUsageEvent(false);
 }
 
 uvap::FrameInfo V4l2Sink::getFormat() const
@@ -228,9 +273,9 @@ uvap::FrameInfo V4l2Sink::getFormat() const
 
     v4l2_format fmt{};
     fmt.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
-    if (::ioctl(fd_, VIDIOC_G_FMT, &fmt) < 0)
+    if (ioctlRetry(fd_, VIDIOC_G_FMT, &fmt) < 0)
     {
-        throw std::runtime_error(errnoMessage("V4l2Sink: VIDIOC_G_FMT"));
+        throwSystemError("V4l2Sink: VIDIOC_G_FMT");
     }
 
     uvap::FrameInfo info{};
@@ -238,7 +283,11 @@ uvap::FrameInfo V4l2Sink::getFormat() const
     info.height = static_cast<int>(fmt.fmt.pix.height);
     info.strideBytes = static_cast<int>(fmt.fmt.pix.bytesperline);
     const auto mapped = fromV4l2Fourcc(fmt.fmt.pix.pixelformat);
-    info.pixelFormat = mapped.value_or(uvap::PixelFormat::Bgr24);
+    if (!mapped)
+    {
+        throw std::runtime_error("V4l2Sink: driver returned unsupported pixel format");
+    }
+    info.pixelFormat = *mapped;
     return info;
 }
 
@@ -251,9 +300,9 @@ StreamParm V4l2Sink::getStreamParm() const
 
     v4l2_streamparm parm{};
     parm.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
-    if (::ioctl(fd_, VIDIOC_G_PARM, &parm) < 0)
+    if (ioctlRetry(fd_, VIDIOC_G_PARM, &parm) < 0)
     {
-        throw std::runtime_error(errnoMessage("V4l2Sink: VIDIOC_G_PARM"));
+        throwSystemError("V4l2Sink: VIDIOC_G_PARM");
     }
 
     StreamParm out{};
@@ -276,9 +325,9 @@ void V4l2Sink::setStreamParm(const StreamParm& parm)
 
     v4l2_streamparm sp{};
     sp.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
-    if (::ioctl(fd_, VIDIOC_G_PARM, &sp) < 0)
+    if (ioctlRetry(fd_, VIDIOC_G_PARM, &sp) < 0)
     {
-        throw std::runtime_error(errnoMessage("V4l2Sink: VIDIOC_G_PARM"));
+        throwSystemError("V4l2Sink: VIDIOC_G_PARM");
     }
 
     sp.parm.output.timeperframe.numerator =
@@ -286,19 +335,23 @@ void V4l2Sink::setStreamParm(const StreamParm& parm)
     sp.parm.output.timeperframe.denominator =
         static_cast<__u32>(parm.fpsNumerator > 0 ? parm.fpsNumerator : 30);
 
-    if (::ioctl(fd_, VIDIOC_S_PARM, &sp) < 0)
+    if (ioctlRetry(fd_, VIDIOC_S_PARM, &sp) < 0)
     {
-        throw std::runtime_error(errnoMessage("V4l2Sink: VIDIOC_S_PARM"));
+        throwSystemError("V4l2Sink: VIDIOC_S_PARM");
     }
 }
 
 void V4l2Sink::yield()
 {
-    // Stop acquire/push immediately so callers do not DQBUF during teardown.
-    streaming_ = false;
+    requireNoOutstandingFrames("yield");
     streamOff();
+    if (pool_)
+    {
+        pool_->reclaimAllQueued();
+    }
     releaseMappedBuffers();
     reqbufsZero();
+    negotiatedSizeImage_ = 0;
 }
 
 void V4l2Sink::recycleBuffers()
@@ -308,17 +361,28 @@ void V4l2Sink::recycleBuffers()
         return;
     }
 
+    requireNoOutstandingFrames("recycleBuffers");
     streamOff();
+    pool_->reclaimAllQueued();
+    try
     {
-        std::lock_guard<std::mutex> lock(pool_->mutex);
-        pool_->freeIndices.clear();
-        for (std::uint32_t i = 0; i < pool_->buffers.size(); ++i)
-        {
-            pool_->freeIndices.push_back(i);
-        }
+        streamOn();
+        streaming_ = true;
     }
-    streamOn();
-    streaming_ = true;
+    catch (...)
+    {
+        streaming_ = false;
+        throw;
+    }
+}
+
+void V4l2Sink::requireNoOutstandingFrames(const char* operation) const
+{
+    if (pool_ && pool_->hasDequeued())
+    {
+        throw std::logic_error(
+            std::string("V4l2Sink: cannot ") + operation + " with outstanding Frames");
+    }
 }
 
 void V4l2Sink::configure(const uvap::SinkConfig& config)
@@ -338,9 +402,9 @@ void V4l2Sink::configure(const uvap::SinkConfig& config)
         throw std::runtime_error("V4l2Sink: unsupported pixel format");
     }
 
-    if (config.bufferCount < 2)
+    if (config.queueDepth < 2)
     {
-        throw std::runtime_error("V4l2Sink: bufferCount must be >= 2");
+        throw std::runtime_error("V4l2Sink: queueDepth must be >= 2");
     }
 
     config_ = config;
@@ -375,7 +439,7 @@ void V4l2Sink::start()
     catch (...)
     {
         releaseMappedBuffers();
-        reqbufsZero();
+        reqbufsZeroNoexcept();
         streaming_ = false;
         throw;
     }
@@ -407,23 +471,18 @@ bool V4l2Sink::pushFrame(uvap::Frame frame)
 {
     if (!streaming_ || !pool_)
     {
-        return false;
+        throw std::logic_error("V4l2Sink: pushFrame requires a streaming sink");
     }
 
-    if (!frame.hasMemory() || frame.memory().use_count() != 1)
+    if (!frame.hasMemory())
     {
-        return false;
+        throw std::invalid_argument("V4l2Sink: pushFrame received an empty frame");
     }
 
     auto* mem = dynamic_cast<BufferMemory*>(frame.memory().get());
     if (mem == nullptr || !mem->belongsTo(pool_.get()))
     {
-        return false;
-    }
-
-    if (mem->state() != uvap::BufferState::Dequeued)
-    {
-        return false;
+        throw std::invalid_argument("V4l2Sink: frame was not acquired from this sink");
     }
 
     const uvap::FrameInfo& info = frame.info();
@@ -431,19 +490,24 @@ bool V4l2Sink::pushFrame(uvap::Frame frame)
         info.height != config_.format.height ||
         info.pixelFormat != config_.format.pixelFormat)
     {
-        return false;
+        throw std::invalid_argument(
+            "V4l2Sink: frame format does not match negotiated sink format");
     }
 
     const std::uint32_t index = mem->index();
-    const std::size_t bytesUsed =
-        imageSizeBytes(info.pixelFormat, info.width, info.height);
+    const std::size_t bytesUsed = negotiatedSizeImage_;
+    const std::size_t mappedLength = pool_->slots[index].mapping.length;
+    if (bytesUsed == 0 || bytesUsed > mappedLength ||
+        bytesUsed > std::numeric_limits<__u32>::max())
+    {
+        throw std::runtime_error("V4l2Sink: negotiated payload exceeds mapped buffer");
+    }
 
     v4l2_buffer buf{};
     buf.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
     buf.memory = V4L2_MEMORY_MMAP;
     buf.index = index;
-    buf.bytesused = static_cast<__u32>(
-        bytesUsed > 0 ? bytesUsed : pool_->buffers[index].length);
+    buf.bytesused = static_cast<__u32>(bytesUsed);
 
     if (info.timestampNs > 0)
     {
@@ -452,18 +516,24 @@ bool V4l2Sink::pushFrame(uvap::Frame frame)
             static_cast<long>((info.timestampNs % 1000000000LL) / 1000LL);
     }
 
-    mem->transitionTo(uvap::BufferState::Queued);
-    frame = uvap::Frame{};
-
-    if (::ioctl(fd_, VIDIOC_QBUF, &buf) < 0)
+    if (!pool_->transition(index,
+                           BufferPool::SlotState::Dequeued,
+                           BufferPool::SlotState::Queued))
     {
-        pool_->returnFree(index);
-        if (errno == EAGAIN || errno == EFAULT || errno == EIO ||
-            errno == ENODEV || errno == EINVAL)
+        throw std::logic_error("V4l2Sink: frame lease is not dequeued");
+    }
+
+    if (ioctlRetry(fd_, VIDIOC_QBUF, &buf) < 0)
+    {
+        const int error = errno;
+        pool_->transition(index,
+                          BufferPool::SlotState::Queued,
+                          BufferPool::SlotState::Free);
+        if (error == EAGAIN || error == EFAULT)
         {
             return false;
         }
-        throw std::runtime_error(errnoMessage("V4l2Sink: VIDIOC_QBUF"));
+        throw std::system_error(error, std::generic_category(), "V4l2Sink: VIDIOC_QBUF");
     }
 
     return true;
@@ -477,11 +547,8 @@ bool V4l2Sink::takeBufferIndex(std::uint32_t& index)
     }
 
     {
-        std::lock_guard<std::mutex> lock(pool_->mutex);
-        if (!pool_->freeIndices.empty())
+        if (pool_->acquireFree(index))
         {
-            index = pool_->freeIndices.front();
-            pool_->freeIndices.pop_front();
             return true;
         }
     }
@@ -490,24 +557,27 @@ bool V4l2Sink::takeBufferIndex(std::uint32_t& index)
     dq.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
     dq.memory = V4L2_MEMORY_MMAP;
 
-    if (::ioctl(fd_, VIDIOC_DQBUF, &dq) < 0)
+    if (ioctlRetry(fd_, VIDIOC_DQBUF, &dq) < 0)
     {
-        // EAGAIN: nothing ready yet (O_NONBLOCK).
-        // EFAULT/EIO/ENODEV/EINVAL: common around consumer disconnect /
-        // STREAMOFF on v4l2loopback — treat as transient backpressure.
-        if (errno == EAGAIN || errno == EFAULT || errno == EIO ||
-            errno == ENODEV || errno == EINVAL)
+        // v4l2loopback may report EFAULT for an empty/disconnected OUTPUT list.
+        if (errno == EAGAIN || errno == EFAULT)
         {
             return false;
         }
-        throw std::runtime_error(errnoMessage("V4l2Sink: VIDIOC_DQBUF"));
+        throwSystemError("V4l2Sink: VIDIOC_DQBUF");
     }
 
-    if (dq.index >= pool_->buffers.size())
+    if (dq.index >= pool_->slots.size())
     {
         throw std::runtime_error("V4l2Sink: DQBUF returned invalid index");
     }
 
+    if (!pool_->transition(dq.index,
+                           BufferPool::SlotState::Queued,
+                           BufferPool::SlotState::Dequeued))
+    {
+        throw std::runtime_error("V4l2Sink: DQBUF returned a buffer not owned by device");
+    }
     index = dq.index;
     return true;
 }
@@ -515,7 +585,7 @@ bool V4l2Sink::takeBufferIndex(std::uint32_t& index)
 uvap::Frame V4l2Sink::makeFrame(std::uint32_t index)
 {
     uvap::FrameInfo info = config_.format;
-    auto memory = std::make_shared<BufferMemory>(pool_, index);
+    auto memory = std::make_unique<BufferMemory>(pool_, index);
     return uvap::Frame{std::move(info), std::move(memory)};
 }
 
@@ -530,7 +600,12 @@ void V4l2Sink::setFormat()
     const std::size_t sizeImage =
         imageSizeBytes(config_.format.pixelFormat,
                        config_.format.width,
-                       config_.format.height);
+                       config_.format.height,
+                       config_.format.strideBytes);
+    if (sizeImage == 0 || sizeImage > std::numeric_limits<__u32>::max())
+    {
+        throw std::runtime_error("V4l2Sink: invalid or oversized frame layout");
+    }
 
     v4l2_format fmt{};
     fmt.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
@@ -544,9 +619,44 @@ void V4l2Sink::setFormat()
         fmt.fmt.pix.bytesperline = static_cast<__u32>(config_.format.strideBytes);
     }
 
-    if (::ioctl(fd_, VIDIOC_S_FMT, &fmt) < 0)
+    if (ioctlRetry(fd_, VIDIOC_S_FMT, &fmt) < 0)
     {
-        throw std::runtime_error(errnoMessage("V4l2Sink: VIDIOC_S_FMT"));
+        throwSystemError("V4l2Sink: VIDIOC_S_FMT");
+    }
+
+    const auto negotiatedFormat = fromV4l2Fourcc(fmt.fmt.pix.pixelformat);
+    if (!negotiatedFormat)
+    {
+        throw std::runtime_error("V4l2Sink: driver negotiated unsupported pixel format");
+    }
+    if (fmt.fmt.pix.width > static_cast<__u32>(std::numeric_limits<int>::max()) ||
+        fmt.fmt.pix.height > static_cast<__u32>(std::numeric_limits<int>::max()) ||
+        fmt.fmt.pix.bytesperline >
+            static_cast<__u32>(std::numeric_limits<int>::max()))
+    {
+        throw std::runtime_error("V4l2Sink: negotiated geometry exceeds API limits");
+    }
+
+    config_.format.width = static_cast<int>(fmt.fmt.pix.width);
+    config_.format.height = static_cast<int>(fmt.fmt.pix.height);
+    config_.format.pixelFormat = *negotiatedFormat;
+    config_.format.strideBytes = static_cast<int>(fmt.fmt.pix.bytesperline);
+
+    const std::size_t minimumSize =
+        imageSizeBytes(config_.format.pixelFormat,
+                       config_.format.width,
+                       config_.format.height,
+                       config_.format.strideBytes);
+    if (minimumSize == 0)
+    {
+        throw std::runtime_error("V4l2Sink: driver negotiated invalid frame layout");
+    }
+    negotiatedSizeImage_ =
+        fmt.fmt.pix.sizeimage > 0 ? static_cast<std::size_t>(fmt.fmt.pix.sizeimage)
+                                  : minimumSize;
+    if (negotiatedSizeImage_ < minimumSize)
+    {
+        throw std::runtime_error("V4l2Sink: driver sizeimage is smaller than frame layout");
     }
 }
 
@@ -556,23 +666,23 @@ void V4l2Sink::requestAndMapBuffers()
     reqbufsZero();
 
     v4l2_requestbuffers req{};
-    req.count = static_cast<__u32>(config_.bufferCount);
+    req.count = static_cast<__u32>(config_.queueDepth);
     req.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
     req.memory = V4L2_MEMORY_MMAP;
 
-    if (::ioctl(fd_, VIDIOC_REQBUFS, &req) < 0)
+    if (ioctlRetry(fd_, VIDIOC_REQBUFS, &req) < 0)
     {
-        throw std::runtime_error(errnoMessage("V4l2Sink: VIDIOC_REQBUFS"));
+        throwSystemError("V4l2Sink: VIDIOC_REQBUFS");
     }
 
     if (req.count < 2)
     {
         throw std::runtime_error("V4l2Sink: driver returned fewer than 2 buffers");
     }
+    config_.queueDepth = static_cast<int>(req.count);
 
     pool_ = std::make_shared<BufferPool>();
-    pool_->fd = fd_;
-    pool_->buffers.resize(req.count);
+    pool_->slots.resize(req.count);
 
     for (__u32 i = 0; i < req.count; ++i)
     {
@@ -581,9 +691,14 @@ void V4l2Sink::requestAndMapBuffers()
         buf.memory = V4L2_MEMORY_MMAP;
         buf.index = i;
 
-        if (::ioctl(fd_, VIDIOC_QUERYBUF, &buf) < 0)
+        if (ioctlRetry(fd_, VIDIOC_QUERYBUF, &buf) < 0)
         {
-            throw std::runtime_error(errnoMessage("V4l2Sink: VIDIOC_QUERYBUF"));
+            throwSystemError("V4l2Sink: VIDIOC_QUERYBUF");
+        }
+        if (buf.length < negotiatedSizeImage_)
+        {
+            throw std::runtime_error(
+                "V4l2Sink: mapped buffer is smaller than negotiated sizeimage");
         }
 
         void* start = ::mmap(nullptr,
@@ -594,11 +709,12 @@ void V4l2Sink::requestAndMapBuffers()
                              buf.m.offset);
         if (start == MAP_FAILED)
         {
-            throw std::runtime_error(errnoMessage("V4l2Sink: mmap"));
+            throwSystemError("V4l2Sink: mmap");
         }
 
-        pool_->buffers[i].start = start;
-        pool_->buffers[i].length = buf.length;
+        pool_->slots[i].mapping.start = start;
+        pool_->slots[i].mapping.length = buf.length;
+        pool_->slots[i].state = BufferPool::SlotState::Free;
         pool_->freeIndices.push_back(i);
     }
 }
@@ -606,24 +722,39 @@ void V4l2Sink::requestAndMapBuffers()
 void V4l2Sink::streamOn()
 {
     v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
-    if (::ioctl(fd_, VIDIOC_STREAMON, &type) < 0)
+    if (ioctlRetry(fd_, VIDIOC_STREAMON, &type) < 0)
     {
-        throw std::runtime_error(errnoMessage("V4l2Sink: VIDIOC_STREAMON"));
+        throwSystemError("V4l2Sink: VIDIOC_STREAMON");
     }
 }
 
-void V4l2Sink::streamOff() noexcept
+void V4l2Sink::streamOff()
 {
-    if (fd_ < 0)
+    if (fd_ < 0 || !streaming_)
     {
         return;
     }
 
     v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
-    ::ioctl(fd_, VIDIOC_STREAMOFF, &type);
+    if (ioctlRetry(fd_, VIDIOC_STREAMOFF, &type) < 0)
+    {
+        throwSystemError("V4l2Sink: VIDIOC_STREAMOFF");
+    }
+    streaming_ = false;
 }
 
-void V4l2Sink::reqbufsZero() noexcept
+void V4l2Sink::streamOffNoexcept() noexcept
+{
+    if (fd_ < 0 || !streaming_)
+    {
+        return;
+    }
+    v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
+    ioctlRetry(fd_, VIDIOC_STREAMOFF, &type);
+    streaming_ = false;
+}
+
+void V4l2Sink::reqbufsZero()
 {
     if (fd_ < 0)
     {
@@ -634,27 +765,27 @@ void V4l2Sink::reqbufsZero() noexcept
     req.count = 0;
     req.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
     req.memory = V4L2_MEMORY_MMAP;
-    ::ioctl(fd_, VIDIOC_REQBUFS, &req);
+    if (ioctlRetry(fd_, VIDIOC_REQBUFS, &req) < 0)
+    {
+        throwSystemError("V4l2Sink: VIDIOC_REQBUFS(0)");
+    }
+}
+
+void V4l2Sink::reqbufsZeroNoexcept() noexcept
+{
+    if (fd_ < 0)
+    {
+        return;
+    }
+    v4l2_requestbuffers request{};
+    request.count = 0;
+    request.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
+    request.memory = V4L2_MEMORY_MMAP;
+    ioctlRetry(fd_, VIDIOC_REQBUFS, &request);
 }
 
 void V4l2Sink::releaseMappedBuffers() noexcept
 {
-    if (!pool_)
-    {
-        return;
-    }
-
-    for (MappedBuffer& buffer : pool_->buffers)
-    {
-        if (buffer.start != nullptr && buffer.length > 0)
-        {
-            ::munmap(buffer.start, buffer.length);
-        }
-        buffer = {};
-    }
-    pool_->buffers.clear();
-    pool_->freeIndices.clear();
-    pool_->fd = -1;
     pool_.reset();
 }
 

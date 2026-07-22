@@ -20,7 +20,13 @@ jobs:
           sudo apt install -y cmake build-essential libopencv-dev
 
       - name: Configure CMake
-        run: cmake -B build -DENABLE_FACE_DETECTION=OFF
+        run: cmake -B build -DENABLE_FACE_DETECTION=OFF -DBUILD_TESTING=ON
 
       - name: Build project
         run: cmake --build build
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Validate install package
+        run: cmake --install build --prefix "${{ runner.temp }}/uvap-install"

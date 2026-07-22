@@ -9,8 +9,8 @@ namespace uvap::example
  * Software IScaler: reads a CPU-mapped input Frame and writes the scaled
  * result into a CPU-mapped output Frame (typically a V4L2 sink buffer).
  *
- * Keeps the generic IScaler API: scale(input, output, callback) writes into
- * output.handle(), invokes callback, and returns output.
+ * The caller retains the exclusive output lease and moves it to the sink after
+ * scaling completes.
  */
 class SoftwareScaler final : public uvap::IScaler
 {
@@ -20,9 +20,7 @@ public:
     void configure(const uvap::ScaleConfig& config) override;
     uvap::ScaleConfig configuration() const override;
 
-    uvap::Frame scale(const uvap::Frame& input,
-                      const uvap::Frame& output,
-                      const uvap::ScaleCallback& callback) override;
+    void scale(const uvap::Frame& input, uvap::Frame& output) override;
 
 private:
     uvap::ScaleConfig config_{};

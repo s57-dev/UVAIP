@@ -41,8 +41,10 @@ struct FrameInfo
 };
 
 /**
- * Transport-agnostic video frame: metadata plus an IMemory backing store.
- * Frames are cheap to copy: they share the MemoryPtr.
+ * Transport-agnostic video frame: metadata plus one exclusive memory lease.
+ *
+ * A Frame is move-only so a transport buffer cannot be queued while aliases
+ * still permit writes to device-owned memory.
  */
 class Frame
 {
@@ -54,6 +56,11 @@ public:
         , memory_(std::move(memory))
     {
     }
+
+    Frame(const Frame&) = delete;
+    Frame& operator=(const Frame&) = delete;
+    Frame(Frame&&) noexcept = default;
+    Frame& operator=(Frame&&) noexcept = default;
 
     const FrameInfo& info() const { return info_; }
     FrameInfo& info() { return info_; }
@@ -77,10 +84,12 @@ public:
         return memory_ && memory_->isCpuMapped();
     }
 
-    void* handle() const
+    void* data() const
     {
-        return memory_ ? memory_->handle() : nullptr;
+        return memory_ ? memory_->data() : nullptr;
     }
+
+    int dmaBufFd() const { return memory_ ? memory_->dmaBufFd() : -1; }
 
     BufferState bufferState() const
     {

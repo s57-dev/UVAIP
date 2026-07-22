@@ -35,7 +35,7 @@ public:
 
     bool isCpuMapped() const override { return true; }
 
-    void* handle() const override
+    void* data() const override
     {
         return pool_->buffers[index_].data.get();
     }
@@ -125,7 +125,7 @@ bool CpuBufferPool::acquire(uvap::Frame& out)
         state_->freeIndices.pop_front();
     }
 
-    auto memory = std::make_shared<BufferMemory>(state_, index);
+    auto memory = std::make_unique<BufferMemory>(state_, index);
     uvap::FrameInfo info = format_;
     out = uvap::Frame{std::move(info), std::move(memory)};
     return true;

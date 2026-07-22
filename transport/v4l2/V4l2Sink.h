@@ -2,29 +2,15 @@
 
 #include "IFrameSink.h"
 
-#include <chrono>
 #include <cstdint>
 #include <deque>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <string>
 #include <vector>
 
 namespace uvap::v4l2
 {
-
-/**
- * Private v4l2loopback event: capture client STREAMON/STREAMOFF usage count.
- * Must match v4l2loopback/v4l2loopback.c.
- */
-inline constexpr std::uint32_t kV4l2EventPriClientUsage =
-    static_cast<std::uint32_t>(0x08000000) + 0x08E00000 + 1;
-
-struct ClientUsageEvent
-{
-    std::uint32_t count = 0;
-};
 
 struct StreamParm
 {
@@ -44,11 +30,11 @@ struct StreamParm
 /**
  * Zero-copy V4L2 VIDEO_OUTPUT sink (e.g. v4l2loopback).
  *
- * The device fd stays open across stop/yield/configure/start so the producer can
- * subscribe to CLIENT_USAGE and renegotiate format between consumer sessions.
- *
  * Buffers are MMAP'd per start(), then cycled: acquireFrame → fill → pushFrame →
  * (device) → DQBUF → acquireFrame again.
+ *
+ * This type is single-thread confined. Buffer leases may be destroyed on
+ * another thread, but all sink operations must run on one owner thread.
  */
 class V4l2Sink final : public uvap::IFrameSink
 {
@@ -61,19 +47,6 @@ public:
 
     /** Open the device if needed (idempotent). */
     void openDevice();
-
-    /** Subscribe to V4L2_EVENT_PRI_CLIENT_USAGE (SEND_INITIAL). */
-    void subscribeClientUsage();
-
-    /**
-     * Wait for a CLIENT_USAGE event.
-     * Returns nullopt on timeout; throws on device errors.
-     */
-    std::optional<ClientUsageEvent> waitClientUsage(
-        std::chrono::milliseconds timeout);
-
-    /** Non-blocking read of pending CLIENT_USAGE events; nullopt if none. */
-    std::optional<ClientUsageEvent> pollClientUsage();
 
     uvap::FrameInfo getFormat() const;
     StreamParm getStreamParm() const;
@@ -101,7 +74,8 @@ public:
     bool acquireFrame(uvap::Frame& out) override;
     bool pushFrame(uvap::Frame frame) override;
 
-    int fd() const { return fd_; }
+    /** Borrowed native handle for tightly scoped platform adapters. */
+    int nativeHandle() const { return fd_; }
     bool isOpen() const { return fd_ >= 0; }
     bool isStreaming() const { return streaming_; }
 
@@ -112,34 +86,55 @@ private:
         std::size_t length = 0;
     };
 
-    /** Shared pool so outstanding Frames remain valid if the sink stops carefully. */
+    /** Queue generation shared by the sink and its outstanding buffer leases. */
     struct BufferPool
     {
-        int fd = -1;
-        std::vector<MappedBuffer> buffers;
-        std::deque<std::uint32_t> freeIndices;
-        std::mutex mutex;
+        enum class SlotState
+        {
+            Free,
+            Dequeued,
+            Queued,
+        };
 
-        void returnFree(std::uint32_t index);
+        struct Slot
+        {
+            MappedBuffer mapping;
+            SlotState state = SlotState::Free;
+        };
+
+        ~BufferPool();
+
+        std::vector<Slot> slots;
+        std::deque<std::uint32_t> freeIndices;
+        mutable std::mutex mutex;
+
+        bool acquireFree(std::uint32_t& index);
+        bool transition(std::uint32_t index, SlotState from, SlotState to);
+        void releaseLease(std::uint32_t index) noexcept;
+        void reclaimAllQueued();
+        bool hasDequeued() const;
     };
 
     class BufferMemory;
 
     void closeDevice() noexcept;
+    void validateCapabilities();
     void releaseMappedBuffers() noexcept;
     void setFormat();
     void requestAndMapBuffers();
     void streamOn();
-    void streamOff() noexcept;
-    void reqbufsZero() noexcept;
+    void streamOff();
+    void streamOffNoexcept() noexcept;
+    void reqbufsZero();
+    void reqbufsZeroNoexcept() noexcept;
     bool takeBufferIndex(std::uint32_t& index);
     uvap::Frame makeFrame(std::uint32_t index);
-    std::optional<ClientUsageEvent> dequeueClientUsageEvent(bool nonblock);
+    void requireNoOutstandingFrames(const char* operation) const;
 
     std::string devicePath_;
     int fd_ = -1;
-    bool clientUsageSubscribed_ = false;
     uvap::SinkConfig config_{};
+    std::size_t negotiatedSizeImage_ = 0;
     bool streaming_ = false;
     std::shared_ptr<BufferPool> pool_;
 };
