@@ -1,5 +1,7 @@
-# Optional TFLite BlazeFace webcam demo.
+# Optional TFLite BlazeFace webcam demo (Qt UI).
 # Built when ENABLE_FACE_DETECTION=ON and TensorFlow Lite is available.
+
+find_package(Qt5 REQUIRED COMPONENTS Widgets)
 
 add_library(face_detector_lib FaceDetector.cpp)
 target_include_directories(face_detector_lib
@@ -13,10 +15,19 @@ target_link_libraries(face_detector_lib
         TensorFlowLite::TensorFlowLite
 )
 
-add_executable(face_detect main.cpp)
-target_link_libraries(face_detect PRIVATE face_detector_lib)
+add_executable(face_detect
+    main.cpp
+    FaceDetectWindow.cpp
+    FaceDetectWindow.h
+)
 set_target_properties(face_detect PROPERTIES
+    AUTOMOC ON
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/out
+)
+target_link_libraries(face_detect
+    PRIVATE
+        face_detector_lib
+        Qt5::Widgets
 )
 
 set(FACE_MODEL_PATH

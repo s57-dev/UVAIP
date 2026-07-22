@@ -93,9 +93,11 @@ cd ../out
 
 Options: `--device PATH|INDEX`, `--model PATH`, `--width N`, `--height N`, `--fps N`.
 
-The **mode** trackbar lists resolutions from `Camera::getAvailableCameraConfigs()`. Press **`a`** to apply (close → arm format on loopback → reopen). Press **`q`** to quit.
+GUI: Qt window with resolution combo, FPS spinbox, and **Apply**. On apply the client
+closes capture, arms the new format on the loopback device, then reopens.
 
 Run from `out/` so the default model at `out/models/face_detection_short_range.tflite` is found.
+Requires Qt5 Widgets (`libqt5widgets5` / `qtbase5-dev`).
 
-Typical demo: start `chessboard_producer`, start `face_detect --device /dev/video10`, change mode/fps, press `a`.
+Typical demo: start `chessboard_producer`, start `face_detect --device /dev/video10`, change resolution/FPS, click **Apply**.
 
