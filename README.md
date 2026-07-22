@@ -55,10 +55,11 @@ cd build && ctest --output-on-failure
 
 ## Chessboard producer (UVAP synthetic VAL)
 
-Requires [v4l2loopback](https://github.com/umlaeute/v4l2loopback), e.g.:
+Requires [v4l2loopback](https://github.com/umlaeute/v4l2loopback) (vendored under `v4l2loopback/`), e.g.:
 
 ```bash
-sudo modprobe v4l2loopback devices=1 video_nr=10 exclusive_caps=1
+sudo modprobe v4l2loopback devices=1 video_nr=10 exclusive_caps=1 \
+  max_width=1280 max_height=720
 ```
 
 Then:
@@ -68,25 +69,33 @@ cmake --build build --target chessboard_producer
 ./out/chessboard_producer --device /dev/video10
 ```
 
-In another terminal, consume the virtual camera:
+The producer STREAMONs a default size, watches `CLIENT_USAGE`, and on consumer reconnect reads `G_FMT`/`G_PARM` and reconfigures the scaler + sink to match.
+
+In another terminal:
 
 ```bash
-ffplay -f v4l2 /dev/video10
-# or: opencv VideoCapture on device 10
+ffplay -f v4l2 -framerate 30 /dev/video10
+# or face_detect (below)
 ```
 
 Press `q` then Enter in the producer to quit.
 
-Pipeline: producer CPU pool (1280×720 chessboard) → software scaler → V4L2 sink pool (640×480) → v4l2loopback.
+Pipeline: producer CPU pool (1280×720 chessboard) → software scaler → V4L2 sink (consumer format) → v4l2loopback.
 
 ## Face detect example
 
 ```bash
-cd out
-./face_detect --device 0
+cd build && cmake .. -DENABLE_FACE_DETECTION=ON && cmake --build . --target face_detect
+cd ../out
 ./face_detect --device /dev/video10
+./face_detect --device 0
 ```
 
 Options: `--device PATH|INDEX`, `--model PATH`, `--width N`, `--height N`, `--fps N`.
 
-Run from `out/` so the default model at `out/models/face_detection_short_range.tflite` is found. Press `q` then Enter to quit.
+The **mode** trackbar lists resolutions from `Camera::getAvailableCameraConfigs()`. Press **`a`** to apply (close → arm format on loopback → reopen). Press **`q`** to quit.
+
+Run from `out/` so the default model at `out/models/face_detection_short_range.tflite` is found.
+
+Typical demo: start `chessboard_producer`, start `face_detect --device /dev/video10`, change mode/fps, press `a`.
+

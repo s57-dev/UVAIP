@@ -4,19 +4,27 @@
 #include "camera/FrameQueue.h"
 #include "camera/ICallBack.h"
 
-#include <atomic>
+#include <linux/videodev2.h>
+#include <sys/ioctl.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace
 {
 
 struct Options
 {
-    std::string device = "0";
+    std::string device = "/dev/video10";
     std::string modelPath = "models/face_detection_short_range.tflite";
     int width = 640;
     int height = 480;
@@ -28,10 +36,7 @@ void printUsage(const char* argv0)
     std::cerr
         << "Usage: " << argv0
         << " [--device PATH|INDEX] [--model PATH] [--width N] [--height N] [--fps N]\n"
-        << "  Face detection client over an OpenCV/V4L2 capture device.\n"
-        << "  Examples:\n"
-        << "    " << argv0 << " --device 0\n"
-        << "    " << argv0 << " --device /dev/video10\n";
+        << "  Keys: a=apply resolution/FPS from trackbars, q=quit.\n";
 }
 
 Options parseArgs(int argc, char** argv)
@@ -77,6 +82,92 @@ Options parseArgs(int argc, char** argv)
     return opt;
 }
 
+/** Unique WxH entries from Camera::getAvailableCameraConfigs(). */
+std::vector<CameraConfiguration> uniqueResolutions(const Camera& camera)
+{
+    std::vector<CameraConfiguration> out;
+    for (const CameraConfiguration& cfg : camera.getAvailableCameraConfigs())
+    {
+        bool seen = false;
+        for (const CameraConfiguration& existing : out)
+        {
+            if (existing.width == cfg.width && existing.height == cfg.height)
+            {
+                seen = true;
+                break;
+            }
+        }
+        if (!seen)
+        {
+            out.push_back(cfg);
+        }
+    }
+    return out;
+}
+
+int indexOfResolution(const std::vector<CameraConfiguration>& modes, int width, int height)
+{
+    for (int i = 0; i < static_cast<int>(modes.size()); ++i)
+    {
+        if (modes[static_cast<std::size_t>(i)].width == width &&
+            modes[static_cast<std::size_t>(i)].height == height)
+        {
+            return i;
+        }
+    }
+    return 0;
+}
+
+bool isV4l2DevicePath(const std::string& device)
+{
+    return device.find("/dev/video") == 0;
+}
+
+void armLoopbackFormat(const std::string& device, int width, int height, int fps)
+{
+    const int fd = ::open(device.c_str(), O_RDWR | O_NONBLOCK);
+    if (fd < 0)
+    {
+        throw CameraError(std::string("armLoopbackFormat: open ") + device + ": " +
+                          std::strerror(errno));
+    }
+
+    v4l2_format fmt{};
+    fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    if (::ioctl(fd, VIDIOC_G_FMT, &fmt) < 0)
+    {
+        const int err = errno;
+        ::close(fd);
+        throw CameraError(std::string("armLoopbackFormat: G_FMT: ") + std::strerror(err));
+    }
+
+    fmt.fmt.pix.width = static_cast<__u32>(width);
+    fmt.fmt.pix.height = static_cast<__u32>(height);
+    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_BGR24;
+    fmt.fmt.pix.field = V4L2_FIELD_NONE;
+    fmt.fmt.pix.bytesperline = static_cast<__u32>(width * 3);
+    fmt.fmt.pix.sizeimage = static_cast<__u32>(width * height * 3);
+
+    if (::ioctl(fd, VIDIOC_S_FMT, &fmt) < 0)
+    {
+        const int err = errno;
+        ::close(fd);
+        throw CameraError(std::string("armLoopbackFormat: S_FMT: ") + std::strerror(err));
+    }
+
+    v4l2_streamparm parm{};
+    parm.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    if (::ioctl(fd, VIDIOC_G_PARM, &parm) == 0)
+    {
+        parm.parm.capture.timeperframe.numerator = 1;
+        parm.parm.capture.timeperframe.denominator =
+            static_cast<__u32>(fps > 0 ? fps : 30);
+        ::ioctl(fd, VIDIOC_S_PARM, &parm);
+    }
+
+    ::close(fd);
+}
+
 class FrameCapture : public ICallback
 {
 public:
@@ -93,7 +184,6 @@ public:
         {
             bgr = frame;
         }
-
         frameQueue.push(bgr);
         return true;
     }
@@ -108,70 +198,140 @@ int main(int argc, char** argv)
 {
     try
     {
-        const Options opt = parseArgs(argc, argv);
+        Options opt = parseArgs(argc, argv);
 
         FrameQueue frameQueue;
-        std::atomic<bool> quit{false};
-
-        std::thread inputThread([&quit, &opt]() {
-            std::cout << "Face detect on " << opt.device
-                      << ". Press q then Enter to quit." << std::endl;
-            char c = 0;
-            std::cin >> c;
-            if (c == 'q')
-            {
-                quit = true;
-            }
-        });
+        FaceDetector faceDetector(opt.modelPath);
+        FrameCapture capture(frameQueue);
 
         CameraConfiguration config;
         config.width = opt.width;
         config.height = opt.height;
-        config.frameRate = opt.fps;
+        config.frameRate = opt.fps > 0 ? opt.fps : 30;
 
-        FaceDetector faceDetector(opt.modelPath);
+        auto camera = std::make_unique<Camera>(opt.device, config);
+        const std::vector<CameraConfiguration> modes = uniqueResolutions(*camera);
+        if (modes.empty())
+        {
+            throw CameraError("No camera resolutions available");
+        }
 
-        Camera camera(opt.device, config);
-        FrameCapture capture(frameQueue);
+        int modeIndex = indexOfResolution(modes, opt.width, opt.height);
+        int fps = config.frameRate;
+        config.width = modes[static_cast<std::size_t>(modeIndex)].width;
+        config.height = modes[static_cast<std::size_t>(modeIndex)].height;
 
-        camera.setCallback(&capture);
-        camera.open();
+        camera->setConfiguration(config);
+        camera->setCallback(&capture);
+        camera->open();
+
+        const std::string windowName = "Face Detect";
+        cv::namedWindow(windowName, cv::WINDOW_AUTOSIZE);
+        cv::createTrackbar(
+            "mode", windowName, &modeIndex, static_cast<int>(modes.size()) - 1);
+        cv::createTrackbar("fps", windowName, &fps, 60);
+        cv::setTrackbarMin("fps", windowName, 1);
+
+        std::cout << "Face detect on " << opt.device
+                  << ". mode trackbar = Camera resolutions, a=apply, q=quit.\n";
+        for (std::size_t i = 0; i < modes.size(); ++i)
+        {
+            std::cout << "  [" << i << "] " << modes[i].width << "x" << modes[i].height
+                      << "\n";
+        }
 
         cv::Mat latestFrame;
-        while (!quit)
+        bool running = true;
+        while (running)
         {
+            const int key = cv::waitKey(1);
+            if (key == 'q' || key == 'Q' || key == 27)
+            {
+                running = false;
+                break;
+            }
+
+            if (key == 'a' || key == 'A')
+            {
+                if (modeIndex < 0)
+                {
+                    modeIndex = 0;
+                }
+                if (modeIndex >= static_cast<int>(modes.size()))
+                {
+                    modeIndex = static_cast<int>(modes.size()) - 1;
+                }
+                if (fps < 1)
+                {
+                    fps = 30;
+                }
+
+                const CameraConfiguration& mode =
+                    modes[static_cast<std::size_t>(modeIndex)];
+                std::cout << "Applying " << mode.width << "x" << mode.height << " @ " << fps
+                          << " fps\n";
+
+                camera->stop();
+                camera->join();
+                camera->close();
+                camera.reset();
+
+                cv::Mat discard;
+                while (frameQueue.tryPop(discard))
+                {
+                }
+
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                if (isV4l2DevicePath(opt.device))
+                {
+                    armLoopbackFormat(opt.device, mode.width, mode.height, fps);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                }
+
+                config.width = mode.width;
+                config.height = mode.height;
+                config.frameRate = fps;
+                camera = std::make_unique<Camera>(opt.device, config);
+                camera->setCallback(&capture);
+                camera->open();
+            }
+
             cv::Mat frame;
             if (frameQueue.waitPop(frame, std::chrono::milliseconds(33)))
             {
                 latestFrame = std::move(frame);
-
                 const int faceCount = faceDetector.countFaces(latestFrame);
 
-                std::cout << "Queue size: " << frameQueue.size()
-                          << " | Latest frame: " << latestFrame.cols
-                          << "x" << latestFrame.rows
-                          << " | Faces: " << faceCount << std::endl;
+                const int mi = std::max(
+                    0, std::min(modeIndex, static_cast<int>(modes.size()) - 1));
+                const auto& mode = modes[static_cast<std::size_t>(mi)];
 
-                cv::putText(latestFrame, "Faces: " + std::to_string(faceCount),
-                            cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 1.0,
-                            cv::Scalar(0, 255, 0), 2);
+                std::cout << "Frame: " << latestFrame.cols << "x" << latestFrame.rows
+                          << " | Faces: " << faceCount << " | selected " << mode.width
+                          << "x" << mode.height << " @" << fps << " [a]=apply\n";
 
-                cv::imshow("Face Detect", latestFrame);
-                cv::waitKey(1);
+                cv::putText(latestFrame,
+                            "Faces: " + std::to_string(faceCount),
+                            cv::Point(10, 30),
+                            cv::FONT_HERSHEY_SIMPLEX,
+                            1.0,
+                            cv::Scalar(0, 255, 0),
+                            2);
+                cv::imshow(windowName, latestFrame);
+            }
+            else if (!latestFrame.empty())
+            {
+                cv::imshow(windowName, latestFrame);
             }
         }
 
-        camera.stop();
-        camera.join();
-        camera.close();
-
-        if (inputThread.joinable())
+        if (camera)
         {
-            inputThread.join();
+            camera->stop();
+            camera->join();
+            camera->close();
         }
-
-        std::cout << "Stopped. Remaining frames in queue: " << frameQueue.size() << std::endl;
-
+        cv::destroyAllWindows();
         return 0;
     }
     catch (const CameraError& e)

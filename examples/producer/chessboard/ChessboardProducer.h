@@ -25,6 +25,9 @@ public:
     bool getFrame(uvap::Frame& out, std::chrono::milliseconds timeout) override;
     uvap::FrameInfo frameInfo() const override;
 
+    void setFrameRate(int frameRate);
+    int frameRate() const { return frameRate_; }
+
 private:
     static void drawChessboard(uvap::Frame& frame, std::uint64_t frameIndex);
 

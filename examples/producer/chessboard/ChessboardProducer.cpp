@@ -39,6 +39,11 @@ uvap::FrameInfo ChessboardProducer::frameInfo() const
     return format_;
 }
 
+void ChessboardProducer::setFrameRate(int frameRate)
+{
+    frameRate_ = frameRate > 0 ? frameRate : 30;
+}
+
 bool ChessboardProducer::getFrame(uvap::Frame& out, std::chrono::milliseconds timeout)
 {
     if (!running_ || !pool_)

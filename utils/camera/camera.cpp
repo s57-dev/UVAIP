@@ -74,6 +74,9 @@ void Camera::applyConfiguration()
 {
     const CameraConfiguration config = getConfigSnapshot();
 
+    // Prefer BGR24 so it matches the chessboard V4L2 sink / OpenCV Mat path.
+    camera.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('B', 'G', 'R', '3'));
+
     if (config.width > 0)
     {
         camera.set(CAP_PROP_FRAME_WIDTH, config.width);
@@ -225,5 +228,4 @@ void Camera::close()
     joinWorker();
 
     camera.release();
-    destroyAllWindows();
 }

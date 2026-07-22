@@ -23,13 +23,27 @@ struct Options
     int sinkPool = 4;
 };
 
+struct DetachOnExit
+{
+    std::thread& thread;
+    std::atomic<bool>& quit;
+
+    ~DetachOnExit()
+    {
+        quit = true;
+        if (thread.joinable())
+        {
+            thread.detach();
+        }
+    }
+};
+
 void printUsage(const char* argv0)
 {
     std::cerr
         << "Usage: " << argv0
         << " [--device PATH] [--fps N]\n"
-        << "  Synthetic chessboard producer → software scaler → V4L2 sink.\n"
-        << "  Default device: /dev/video10 (v4l2loopback).\n";
+        << "  Chessboard → scaler → V4L2 sink. Follows consumer G_FMT/G_PARM on reconnect.\n";
 }
 
 Options parseArgs(int argc, char** argv)
@@ -60,10 +74,114 @@ Options parseArgs(int argc, char** argv)
     return opt;
 }
 
+int resolveFps(const uvap::v4l2::StreamParm& parm, int fallback)
+{
+    const int fps = static_cast<int>(parm.fps() + 0.5);
+    return fps > 0 ? fps : (fallback > 0 ? fallback : 30);
+}
+
+void configurePipeline(uvap::v4l2::V4l2Sink& sink,
+                       uvap::example::SoftwareScaler& scaler,
+                       uvap::example::ChessboardProducer& producer,
+                       int width,
+                       int height,
+                       int fps,
+                       int sinkPool)
+{
+    uvap::ScaleConfig scaleConfig{};
+    scaleConfig.width = width;
+    scaleConfig.height = height;
+    scaleConfig.outputFormat = uvap::PixelFormat::Bgr24;
+    scaler.configure(scaleConfig);
+
+    uvap::SinkConfig sinkConfig{};
+    sinkConfig.format.width = width;
+    sinkConfig.format.height = height;
+    sinkConfig.format.pixelFormat = uvap::PixelFormat::Bgr24;
+    sinkConfig.bufferCount = sinkPool;
+    sink.configure(sinkConfig);
+
+    producer.setFrameRate(fps);
+}
+
+bool pushOneFrame(uvap::v4l2::V4l2Sink& sink,
+                  uvap::example::SoftwareScaler& scaler,
+                  uvap::example::ChessboardProducer& producer)
+{
+    uvap::Frame sinkFrame;
+    if (!sink.acquireFrame(sinkFrame))
+    {
+        return false;
+    }
+
+    uvap::Frame producerFrame;
+    if (!producer.getFrame(producerFrame, std::chrono::milliseconds(100)))
+    {
+        return false;
+    }
+
+    // Scale into the sink buffer, then drop the local alias before push so the
+    // sink Frame is the sole owner (pushFrame requires use_count == 1).
+    uvap::Frame filled = scaler.scale(
+        producerFrame,
+        sinkFrame,
+        [](const uvap::Frame&, const uvap::Frame&) {});
+    producerFrame = uvap::Frame{};
+    sinkFrame = uvap::Frame{};
+
+    return sink.pushFrame(std::move(filled));
+}
+
+bool streamUntilIdle(uvap::v4l2::V4l2Sink& sink,
+                     uvap::example::SoftwareScaler& scaler,
+                     uvap::example::ChessboardProducer& producer,
+                     std::atomic<bool>& quit)
+{
+    std::uint32_t clientCount = 1;
+    while (!quit && clientCount > 0)
+    {
+        while (auto ev = sink.pollClientUsage())
+        {
+            clientCount = ev->count;
+        }
+        if (clientCount == 0)
+        {
+            break;
+        }
+
+        try
+        {
+            const int fps = resolveFps(sink.getStreamParm(), producer.frameRate());
+            if (fps != producer.frameRate())
+            {
+                producer.setFrameRate(fps);
+            }
+
+            if (!pushOneFrame(sink, scaler, producer))
+            {
+                if (auto ev = sink.waitClientUsage(std::chrono::milliseconds(20)))
+                {
+                    clientCount = ev->count;
+                }
+            }
+        }
+        catch (const std::exception& ex)
+        {
+            std::cerr << "chessboard_producer: stream error: " << ex.what() << "\n";
+            break;
+        }
+    }
+    return !quit;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
 {
+    std::atomic<bool> quit{false};
+    std::thread inputThread;
+    DetachOnExit joinGuard{inputThread, quit};
+
     try
     {
         const Options opt = parseArgs(argc, argv);
@@ -75,30 +193,17 @@ int main(int argc, char** argv)
 
         uvap::example::ChessboardProducer producer(
             producerFormat, opt.producerPool, opt.fps);
-
-        uvap::ScaleConfig scaleConfig{};
-        scaleConfig.width = opt.sinkWidth;
-        scaleConfig.height = opt.sinkHeight;
-        scaleConfig.outputFormat = uvap::PixelFormat::Bgr24;
-
         uvap::example::SoftwareScaler scaler;
-        scaler.configure(scaleConfig);
-
-        uvap::SinkConfig sinkConfig{};
-        sinkConfig.format.width = opt.sinkWidth;
-        sinkConfig.format.height = opt.sinkHeight;
-        sinkConfig.format.pixelFormat = uvap::PixelFormat::Bgr24;
-        sinkConfig.bufferCount = opt.sinkPool;
-
         uvap::v4l2::V4l2Sink sink(opt.device);
-        sink.configure(sinkConfig);
 
-        producer.start();
-        sink.start();
+        sink.openDevice();
+        sink.subscribeClientUsage();
+        while (sink.pollClientUsage())
+        {
+        }
 
-        std::atomic<bool> quit{false};
-        std::thread inputThread([&quit]() {
-            std::cout << "chessboard_producer streaming to device. Press q then Enter to quit.\n";
+        inputThread = std::thread([&quit]() {
+            std::cout << "chessboard_producer. Press q then Enter to quit.\n";
             char c = 0;
             std::cin >> c;
             if (c == 'q')
@@ -107,44 +212,109 @@ int main(int argc, char** argv)
             }
         });
 
+        producer.start();
+
+        int sinkWidth = opt.sinkWidth;
+        int sinkHeight = opt.sinkHeight;
+        int fps = opt.fps;
+
+        configurePipeline(sink, scaler, producer, sinkWidth, sinkHeight, fps, opt.sinkPool);
+        sink.start();
+        sink.setStreamParm({fps, 1});
+        std::cout << "chessboard_producer: streaming " << sinkWidth << "x" << sinkHeight
+                  << " @ " << fps << " fps\n";
+
         while (!quit)
         {
-            uvap::Frame sinkFrame;
-            if (!sink.acquireFrame(sinkFrame))
+            std::uint32_t clientCount = 0;
+            try
             {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                if (auto ev = sink.waitClientUsage(std::chrono::milliseconds(100)))
+                {
+                    clientCount = ev->count;
+                }
+                while (auto ev = sink.pollClientUsage())
+                {
+                    clientCount = ev->count;
+                }
+            }
+            catch (const std::exception& ex)
+            {
+                std::cerr << "chessboard_producer: event wait: " << ex.what() << "\n";
                 continue;
             }
 
-            uvap::Frame producerFrame;
-            if (!producer.getFrame(producerFrame, std::chrono::milliseconds(100)))
+            if (quit)
             {
-                // Drop the acquired sink buffer back to the pool by destroying it.
+                break;
+            }
+
+            if (clientCount == 0)
+            {
+                // Keep OUTPUT STREAMON so capture clients can open, but do not
+                // fill the v4l2loopback queue while idle (DQBUF then returns
+                // EFAULT and production stalls).
                 continue;
             }
 
-            // Scale into the sink buffer; reassign so we keep a single owner.
-            sinkFrame = scaler.scale(
-                producerFrame,
-                sinkFrame,
-                [](const uvap::Frame&, const uvap::Frame&) {});
-
-            producerFrame = uvap::Frame{};
-
-            if (!sink.pushFrame(std::move(sinkFrame)))
+            std::cout << "chessboard_producer: client attached\n";
+            sink.recycleBuffers();
+            if (!streamUntilIdle(sink, scaler, producer, quit))
             {
-                std::cerr << "pushFrame failed\n";
+                break;
+            }
+
+            std::cout << "chessboard_producer: client detached; reconfigure from G_FMT\n";
+            try
+            {
+                sink.yield();
+                std::this_thread::sleep_for(std::chrono::milliseconds(400));
+
+                if (quit)
+                {
+                    break;
+                }
+
+                const uvap::FrameInfo fmt = sink.getFormat();
+                if (fmt.width > 0 && fmt.height > 0)
+                {
+                    sinkWidth = fmt.width;
+                    sinkHeight = fmt.height;
+                }
+                fps = resolveFps(sink.getStreamParm(), fps);
+
+                configurePipeline(
+                    sink, scaler, producer, sinkWidth, sinkHeight, fps, opt.sinkPool);
+                sink.start();
+                sink.setStreamParm({fps, 1});
+                std::cout << "chessboard_producer: restreaming " << sinkWidth << "x"
+                          << sinkHeight << " @ " << fps << " fps\n";
+            }
+            catch (const std::exception& ex)
+            {
+                std::cerr << "chessboard_producer: reconfigure failed: " << ex.what()
+                          << "\n";
+                try
+                {
+                    if (sink.isStreaming())
+                    {
+                        sink.yield();
+                    }
+                    configurePipeline(
+                        sink, scaler, producer, sinkWidth, sinkHeight, fps, opt.sinkPool);
+                    sink.start();
+                }
+                catch (const std::exception& recoverEx)
+                {
+                    std::cerr << "chessboard_producer: recover failed: " << recoverEx.what()
+                              << "\n";
+                    return 1;
+                }
             }
         }
 
         producer.stop();
         sink.stop();
-
-        if (inputThread.joinable())
-        {
-            inputThread.join();
-        }
-
         return 0;
     }
     catch (const std::exception& ex)
