@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14)
-project(camera_app LANGUAGES CXX)
+project(camera_app LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -91,6 +91,46 @@ target_link_libraries(virtcam_client PRIVATE virtcam_lib)
 set_target_properties(virtcam_client PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/out
 )
+
+# Shared memory transport between VLC plugin and pipeline client
+add_library(shared_frame_channel_lib common/shared_frame_channel.c)
+target_include_directories(shared_frame_channel_lib PUBLIC ${COMMON_INCLUDE_DIR})
+target_link_libraries(shared_frame_channel_lib PUBLIC rt)
+
+# VLC playback -> shared memory -> V4L2 loopback
+add_executable(vlc_pipeline_client vlc_pipeline_client/main.cpp)
+target_link_libraries(vlc_pipeline_client PRIVATE shared_frame_channel_lib ${OpenCV_LIBS})
+set_target_properties(vlc_pipeline_client PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/out
+)
+
+option(ENABLE_VLC_PLUGIN "Build VLC frame tap plugin" OFF)
+if(ENABLE_VLC_PLUGIN)
+    if(NOT VLC_SOURCE_DIR)
+        message(FATAL_ERROR
+            "ENABLE_VLC_PLUGIN=ON requires -DVLC_SOURCE_DIR=/path/to/vlc-source (3.0.x)")
+    endif()
+
+    find_package(VLC REQUIRED)
+    add_library(frame_tap_plugin MODULE vlc_plugin/frame_tap.c)
+    target_include_directories(frame_tap_plugin PRIVATE
+        ${COMMON_INCLUDE_DIR}
+    )
+    target_link_libraries(frame_tap_plugin PRIVATE shared_frame_channel_lib VLC::PluginHeaders)
+    target_compile_definitions(frame_tap_plugin PRIVATE
+        MODULE_NAME=frame_tap
+        MODULE_STRING="frame_tap"
+    )
+    target_compile_options(frame_tap_plugin PRIVATE -fPIC)
+    set_target_properties(frame_tap_plugin PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME "libframe_tap_plugin"
+        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/out/vlc/plugins/video_filter
+    )
+    message(STATUS "VLC frame tap plugin: ENABLED (VLC_SOURCE_DIR=${VLC_SOURCE_DIR})")
+else()
+    message(STATUS "VLC frame tap plugin: DISABLED (pass -DENABLE_VLC_PLUGIN=ON)")
+endif()
 
 # Unit tests
 add_executable(unit_tests

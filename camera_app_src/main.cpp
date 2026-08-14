@@ -40,13 +40,36 @@ private:
 
 int main(int argc, char** argv)
 {
-    (void)argc;
-    (void)argv;
-
     try
     {
         FrameQueue frameQueue;
         std::atomic<bool> quit{false};
+
+        CameraConfiguration config;
+        config.width = 640;
+        config.height = 480;
+        config.frameRate = 30;
+
+        int deviceId = 0;
+        for (int i = 1; i < argc; ++i)
+        {
+            const std::string arg = argv[i];
+            if (arg == "--device" && i + 1 < argc)
+            {
+                deviceId = std::stoi(argv[++i]);
+            }
+        }
+
+#ifdef CAMERA_APP_WITH_FACE_DETECTION
+        const std::string modelPath = "models/face_detection_short_range.tflite";
+        FaceDetector faceDetector(modelPath);
+#endif
+
+        Camera camera(deviceId, config);
+        FrameCapture capture(frameQueue);
+
+        camera.setCallback(&capture);
+        camera.open();
 
         std::thread inputThread([&quit]() {
             std::cout << "Capturing frames into queue. Press q then Enter to quit." << std::endl;
@@ -57,22 +80,6 @@ int main(int argc, char** argv)
                 quit = true;
             }
         });
-
-        CameraConfiguration config;
-        config.width = 640;
-        config.height = 480;
-        config.frameRate = 30;
-
-#ifdef CAMERA_APP_WITH_FACE_DETECTION
-        const std::string modelPath = "models/face_detection_short_range.tflite";
-        FaceDetector faceDetector(modelPath);
-#endif
-
-        Camera camera(0, config);
-        FrameCapture capture(frameQueue);
-
-        camera.setCallback(&capture);
-        camera.open();
 
         cv::Mat latestFrame;
         while (!quit)

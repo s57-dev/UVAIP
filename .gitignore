@@ -1,4 +1,5 @@
 build/
 out/
 build-cmake-test/
+build-ci-sim/
 build-test/
