@@ -1,2 +1,6 @@
 build/
 out/
+build-cmake-test/
+build-ci-sim/
+build-test/
+my_video.mp4

@@ -1,8 +1,10 @@
 #include "camera.h"
 #include "CameraError.h"
 
+#include <chrono>
 #include <iostream>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace std;
@@ -96,9 +98,11 @@ void Camera::joinWorker()
 
 void Camera::open()
 {
-    if (!camera.open(deviceID_))
+    if (!camera.open(deviceID_, cv::CAP_V4L2))
     {
-        throw CameraError("Could not open camera device " + std::to_string(deviceID_));
+        throw CameraError("Could not open camera device " + std::to_string(deviceID_) +
+                          " (is the loopback feed running on /dev/video" +
+                          std::to_string(deviceID_) + "?)");
     }
 
     applyConfiguration();
@@ -167,7 +171,16 @@ void Camera::captureLoop(std::stop_token stopToken)
 
         if (frame.empty())
         {
-            throw CameraError("Empty frame from device " + std::to_string(deviceID_));
+            static auto last_log = std::chrono::steady_clock::now();
+            const auto now = std::chrono::steady_clock::now();
+            if (now - last_log >= std::chrono::seconds(3))
+            {
+                cerr << "Empty frame from device " << deviceID_
+                     << " (start vlc_pipeline_client, then VLC with frame_tap)" << endl;
+                last_log = now;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            continue;
         }
 
         if (callback && !callback->onFrameCapture(frame))

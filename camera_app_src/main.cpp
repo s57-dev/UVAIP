@@ -2,9 +2,15 @@
 #include "CameraError.h"
 #include "FrameQueue.h"
 #include "ICallBack.h"
+
+#ifdef CAMERA_APP_WITH_FACE_DETECTION
+#include "FaceDetector.h"
+#endif
+
 #include <atomic>
 #include <chrono>
 #include <iostream>
+#include <string>
 #include <thread>
 
 class FrameCapture : public ICallback
@@ -32,12 +38,38 @@ private:
     FrameQueue& frameQueue;
 };
 
-int main()
+int main(int argc, char** argv)
 {
     try
     {
         FrameQueue frameQueue;
         std::atomic<bool> quit{false};
+
+        CameraConfiguration config;
+        config.width = 640;
+        config.height = 480;
+        config.frameRate = 30;
+
+        int deviceId = 0;
+        for (int i = 1; i < argc; ++i)
+        {
+            const std::string arg = argv[i];
+            if (arg == "--device" && i + 1 < argc)
+            {
+                deviceId = std::stoi(argv[++i]);
+            }
+        }
+
+#ifdef CAMERA_APP_WITH_FACE_DETECTION
+        const std::string modelPath = "models/face_detection_short_range.tflite";
+        FaceDetector faceDetector(modelPath);
+#endif
+
+        Camera camera(deviceId, config);
+        FrameCapture capture(frameQueue);
+
+        camera.setCallback(&capture);
+        camera.open();
 
         std::thread inputThread([&quit]() {
             std::cout << "Capturing frames into queue. Press q then Enter to quit." << std::endl;
@@ -49,17 +81,6 @@ int main()
             }
         });
 
-        CameraConfiguration config;
-        config.width = 640;
-        config.height = 480;
-        config.frameRate = 30;
-
-        Camera camera(10, config);
-        FrameCapture capture(frameQueue);
-
-        camera.setCallback(&capture);
-        camera.open();
-
         cv::Mat latestFrame;
         while (!quit)
         {
@@ -67,12 +88,26 @@ int main()
             if (frameQueue.waitPop(frame, std::chrono::milliseconds(33)))
             {
                 latestFrame = std::move(frame);
+
+#ifdef CAMERA_APP_WITH_FACE_DETECTION
+                const int faceCount = faceDetector.countFaces(latestFrame);
+
+                std::cout << "Queue size: " << frameQueue.size()
+                          << " | Latest frame: " << latestFrame.cols
+                          << "x" << latestFrame.rows
+                          << " | Faces: " << faceCount << std::endl;
+
+                cv::putText(latestFrame, "Faces: " + std::to_string(faceCount),
+                            cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 1.0,
+                            cv::Scalar(0, 255, 0), 2);
+#else
                 std::cout << "Queue size: " << frameQueue.size()
                           << " | Latest frame: " << latestFrame.cols
                           << "x" << latestFrame.rows << std::endl;
-            
-                        cv::imshow("Latest Frame", latestFrame);
-                        cv::waitKey(1);
+#endif
+
+                cv::imshow("Latest Frame", latestFrame);
+                cv::waitKey(1);
             }
         }
 

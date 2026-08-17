@@ -62,7 +62,7 @@ int main()
 {
     try
     {
-        const videoParams params = {640, 480, 1};
+        const videoParams params = {640, 480, 30};
 
         int v4l2_fd = setup_v4l2_output("/dev/video10", params.width, params.height);
 
@@ -102,6 +102,7 @@ int main()
             }
         }
 
+
         virtcam.stop();
         virtcam.join();
         virtcam.close();
@@ -109,6 +110,7 @@ int main()
 
         if (inputThread.joinable())
         {
+            //join
             inputThread.join();
         }
 
