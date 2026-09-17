@@ -1,4 +1,4 @@
-# UVAP
+# UVAIP
 
 Unified Video AI Pipeline library and reference implementation: portable VAL contracts,
 a Linux V4L2 producer transport, a synthetic producer, and sample consumers.
